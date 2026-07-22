@@ -1,85 +1,90 @@
-# Wealth Prof — เอกสารวิเคราะห์และออกแบบระบบ (v1)
+# Wealth Prof — System Analysis & Design (v2)
 
-> เอกสารนี้ต่อยอดจาก [SPEC.md](./SPEC.md) — วิเคราะห์สเปกเดิม เสนอการออกแบบสถาปัตยกรรม, data model, UX และแผนการพัฒนา สำหรับสร้างแอพจริงใน repo นี้
+> Builds on [SPEC.md](./SPEC.md). Analyses the spec and proposes the architecture, data model, financial logic, UX and delivery plan for the real app in this repo.
+>
+> **v2 changes:** rewritten in English; added transfers as a first-class transaction kind (D7); added recurring transactions (D8); fixed credit-utilisation double counting, per-cycle card adjustments, soft delete, RLS coverage of child tables, interest-rate units, and the import strategy.
 
 ---
 
-## 1. สรุปการวิเคราะห์สเปก
+## 1. Spec analysis
 
-### 1.1 สิ่งที่สเปกเดิมทำได้ดีอยู่แล้ว (คงไว้)
+### 1.1 What the spec already gets right (keep)
 
-* ขอบเขตชัด: แอพสำหรับ 2 คน ไม่ใช่ multi-tenant SaaS → ออกแบบให้เรียบง่ายได้มาก
-* ฟีเจอร์ baseline จากต้นแบบครบวงจรแล้ว: บันทึก → ติดตามผ่อน → วางแผน
-* มีข้อมูลจริง 600+ รายการเป็นชุดทดสอบ → ไม่ต้องเดา use case
+* Clear scope: an app for two people, not a multi-tenant SaaS — the design can stay genuinely simple.
+* The prototype baseline already covers the full loop: record → track installments → plan.
+* 600+ real records exist as a test set — no need to guess the use cases.
 
-### 1.2 จุดที่ควรปรับจากต้นแบบ (การตัดสินใจออกแบบสำคัญ)
+### 1.2 Changes from the prototype (key design decisions)
 
-| # | ต้นแบบเดิม | ปัญหา | ข้อเสนอใหม่ |
+| # | Prototype | Problem | Proposal |
 |---|---|---|---|
-| D1 | คิดยอดผ่อนเป็น "รายเดือนปฏิทิน" | เงินจริงต้องจ่ายตาม **รอบบิลบัตร** (วันสรุปยอด/วันครบกำหนด) ไม่ใช่ตามเดือน — sheet เดิมก็สรุปตามรอบบิล | สร้าง **Billing Cycle Engine** เป็น logic กลาง (หัวข้อ 6.1) แล้วให้ทั้ง Dashboard, ปฏิทินผ่อน, หน้าบัตร ใช้ตัวเดียวกัน |
-| D2 | "งวดที่จ่ายแล้ว" เป็นตัวนับ (counter) | กดพลาดแล้วแก้ยาก, ไม่รู้ว่าจ่ายเมื่อไหร่, ไม่เชื่อมกับ transactions | เก็บเป็น **event** ในตาราง `installment_payments` (จ่ายงวดไหน วันไหน ผูก transaction ได้) — ตัวนับกลายเป็นค่า derived, undo ได้ |
-| D3 | "ยอดใช้บัตรรอบนี้" กรอกเอง | ซ้ำซ้อนกับ transactions ที่ผูกบัตรอยู่แล้ว เสี่ยงตัวเลขไม่ตรงกัน | คำนวณจาก transactions ในรอบบิลอัตโนมัติ + มีช่อง **ปรับยอด (adjustment)** ไว้เทียบกับ statement จริง |
-| D4 | ยอดบัญชีกรอกเองล้วน | ลืมอัปเดตแล้วตัวเลขเพี้ยนสะสม | ใช้ pattern **reconcile**: บันทึก "ยอดตั้งต้น ณ วันที่ X" แล้วระบบบวก/ลบ transactions ให้เอง ผู้ใช้กด reconcile เทียบยอดจริงเป็นครั้งคราว |
-| D5 | ดอกเบี้ยเก็บในช่องหมายเหตุ (เช่น "ผ่อน 9.99%") | คำนวณ avalanche อัตโนมัติไม่ได้ | แยกเป็นฟิลด์ตัวเลข `interest_rate` จริง ๆ (import ด้วย regex จากหมายเหตุเดิม) |
-| D6 | ข้อมูลเป็น JSON ก้อนเดียว, ไม่มี auth | ชนกันเวลาแก้พร้อมกัน, ใครมีลิงก์เห็นหมด | Postgres + Row Level Security + login แยกคน (หัวข้อ 5) |
+| D1 | Installment burden computed per **calendar month** | Real money moves on each card's **billing cycle** (statement day / due day), not per month — the source sheet already summarises per cycle | A **Billing Cycle Engine** as the one shared module (§6.1); Dashboard, forward calendar and the cards page all call it |
+| D2 | "Periods paid" is a counter | Hard to correct a mis-tap, no record of when it was paid, not linked to transactions | Store each payment as an **event** in `installment_payments` (which period, when, optionally linked to a transaction). The counter becomes derived and undoable |
+| D3 | Current-cycle card spend typed in by hand | Duplicates transactions that are already linked to the card; the two numbers drift | Compute it from transactions in the cycle, plus a **per-cycle adjustment row** to reconcile against the real statement |
+| D4 | Account balances typed in by hand | One missed update and the number drifts permanently | **Reconcile pattern**: store "balance as of anchor date", let the system add/subtract transactions since. The user reconciles against the bank app occasionally |
+| D5 | Interest rate buried in a free-text note ("installment 9.99%") | Avalanche ranking can't be automated | A real numeric `annual_interest_rate` field, normalised to **% per year** for every entity (§6.4), imported from the old notes via regex |
+| D6 | One JSON blob, no auth | Concurrent edits clobber each other; anyone with the link sees everything | Postgres + Row Level Security + per-person login (§5) |
+| **D7** | Only income and expense exist | Paying a credit-card bill, taking a cash advance and moving money between own accounts are none of those. Recording a card payment as an expense **double counts** it against the card purchases | Add `transfer` as a third transaction kind with a source and a destination, excluded from every income/expense total (§4.3) |
+| **D8** | Every recurring item re-typed monthly | Salary, insurance, phone, subscriptions are the most repetitive entries; forgetting one silently breaks the monthly summary and the cash-flow forecast | **Recurring rules** that materialise real transactions on schedule and project future ones into the forward calendar (§4.4, §6.6) |
 
-### 1.3 Pain point → ฟีเจอร์ที่ตอบโจทย์ตรง ๆ
+### 1.3 Pain point → the feature that answers it
 
-* **สภาพคล่องตึงบางเดือน (เหลือ ~3,600)** → Dashboard ต้องโชว์ "ยอดที่ต้องเตรียมก่อนวันครบกำหนดถัดไป" เด่นที่สุดในหน้าแรก ไม่ใช่แค่สรุปเดือน
-* **Cash advance 9.99% ปนกับผ่อน 0%** → หน้าแผนปลดหนี้ต้องแยกสี/เรียงตามดอกเบี้ยชัดเจน + simulator "ถ้ามีเงินโปะเพิ่ม X บาท ประหยัดดอกเบี้ยเท่าไหร่"
-* **ไม่แยกรายรับ-รายจ่ายสองคน** → ทุก record มีฟิลด์ owner และทุกหน้าจอมี filter chip คนที่ 1 / คนที่ 2 / ร่วมกัน / ทั้งหมด ติดอยู่ตำแหน่งเดิมเสมอ
-
----
-
-## 2. หลักการออกแบบ (Design Principles)
-
-1. **Mobile-first จริงจัง** — ทุก flow ต้องทำจบได้ด้วยมือเดียวบนมือถือ; เว็บ desktop เป็นแค่ layout กว้างขึ้น
-2. **บันทึกรายการต้องเร็วกว่า 10 วินาที** — นี่คือ action ที่ทำบ่อยที่สุด ถ้าช้าคนจะเลิกจด (เหตุผลเดียวกับที่ sheet เดิม "ใช้บนมือถือลำบาก")
-3. **ตัวเลขเดียว มาจากที่เดียว** — logic คำนวณ (รอบบิล, ยอดผ่อนคงเหลือ, วงเงิน) อยู่ใน module เดียว ทุกหน้าจอเรียกใช้ร่วมกัน ห้าม copy สูตร
-4. **แก้ผิดได้เสมอ** — ทุก action สำคัญ (จ่ายงวด, ลบรายการ) undo ได้ หรืออย่างน้อยแก้ย้อนหลังได้ง่าย
-5. **เริ่มเล็ก ขยายได้** — schema ออกแบบเผื่อเฟสลงทุน/เกษียณ แต่ไม่ implement ล่วงหน้า
+* **Liquidity is tight in some months (~฿3,600 left)** → the Dashboard must surface "cash to set aside before the next due date" prominently, not just a monthly summary.
+* **9.99% cash advances mixed in with 0% installments** → the payoff page must rank and colour by interest rate, and offer a simulator: "if I put ฿X extra per month towards debt, how much interest do I save?"
+* **Two people's money not separated** → every record carries an owner, and every screen has the same person filter chip in the same place.
+* **Repetitive data entry drove the user off the sheet on mobile** → quick-add in under 10 seconds (§7.2) *and* recurring rules so the fixed items never need typing at all.
 
 ---
 
-## 3. Tech Stack ที่แนะนำ
+## 2. Design principles
 
-| ส่วน | เลือกใช้ | เหตุผล |
+1. **Genuinely mobile-first** — every flow completable one-handed on a phone; desktop is the same components in a wider layout.
+2. **Recording a transaction takes under 10 seconds** — the most frequent action. If it is slow, people stop recording, which is exactly why the sheet failed on mobile.
+3. **One number, one source** — all financial logic (billing cycles, outstanding balances, credit utilisation) lives in one module that every screen calls. Never copy a formula.
+4. **Everything is reversible** — destructive actions are soft deletes with an undo window; every derived counter is recomputed from events, never mutated in place.
+5. **Start small, stay extensible** — the schema leaves room for the investing/retirement phase without implementing it early.
+
+---
+
+## 3. Tech stack
+
+| Layer | Choice | Why |
 |---|---|---|
-| Frontend | **React 18 + TypeScript + Vite** (SPA) | ไม่ต้องมี server-side rendering — แอพส่วนตัว 2 คน ไม่มี SEO; SPA ทำ PWA/offline ง่ายกว่า Next.js และ deploy เป็น static ได้ฟรี |
-| UI | **Tailwind CSS + shadcn/ui** | ทำ mobile UI สวย/เร็ว, dark mode ฟรี, ปรับแต่งเป็นภาษาไทยง่าย |
-| State/Data | **TanStack Query** + Supabase JS client | cache + optimistic update + persist ลง IndexedDB (ได้ offline read ฟรีเกือบทั้งก้อน) |
-| Backend/DB | **Supabase** (Postgres + Auth + Realtime) | ครบในตัวเดียว: DB จริง, login, sync real-time, Row Level Security; free tier เหลือเฟือสำหรับ 2 ผู้ใช้ |
-| Charts | **Recharts** | เบา พอสำหรับกราฟแนวโน้ม + bar list |
-| PWA | **vite-plugin-pwa** (Workbox) | installable + cache shell + offline read |
-| Hosting | **Vercel** (static) | deploy จาก GitHub อัตโนมัติ, custom domain ฟรี |
-| Testing | **Vitest** | เน้น unit test ที่ logic การเงิน (รอบบิล/avalanche) เป็นหลัก |
+| Frontend | **React 18 + TypeScript + Vite** (SPA) | No SSR needed — a private two-person app has no SEO. An SPA is easier to make offline-capable than Next.js and deploys as static files |
+| UI | **Tailwind CSS + shadcn/ui** | Fast, good-looking mobile UI, free dark mode, easy to localise to Thai |
+| State/Data | **TanStack Query** + Supabase JS client | Cache, optimistic updates, and persistence to IndexedDB (offline reads almost for free) |
+| Backend/DB | **Supabase** (Postgres + Auth + Realtime) | Real database, auth, realtime sync and Row Level Security in one product; the free tier is ample for two users |
+| Charts | **Recharts** | Light, sufficient for a trend line and a bar list |
+| PWA | **vite-plugin-pwa** (Workbox) | Installable, cached shell, offline reads |
+| Hosting | **Vercel** (static) | Automatic deploys from GitHub, free custom domain |
+| Testing | **Vitest** | Focused on the financial logic (billing cycles, recurrence, avalanche) |
 
-**ทางเลือกที่พิจารณาแล้วไม่เลือก:**
+**Considered and rejected:**
 
-* *Next.js* — ได้ประโยชน์หลัก ๆ ตอนมี SSR/SEO ซึ่งแอพนี้ไม่ต้องการ; เพิ่ม complexity ของ server components โดยไม่จำเป็น
-* *Firebase* — Firestore เป็น NoSQL ทำ query สรุปรายเดือน/รายรอบบิลยากกว่า SQL มาก
-* *ทำ backend เอง (Express/Nest)* — ไม่คุ้มสำหรับ 2 ผู้ใช้; Supabase RLS แทน API layer ได้เลย
+* *Next.js* — its main benefits are SSR and SEO, neither of which this app needs; server components add complexity for nothing.
+* *Firebase* — Firestore is NoSQL; per-month and per-billing-cycle aggregation is far harder than in SQL.
+* *A custom backend (Express/Nest)* — not worth it for two users; RLS replaces the API layer.
 
-### สถาปัตยกรรมรวม
+### Architecture
 
 ```mermaid
 flowchart LR
-    subgraph มือถือ/เว็บ ของทั้งสองคน
+    subgraph Both phones / browsers
         A[React PWA<br/>Vite + Tailwind]
-        B[(IndexedDB cache<br/>offline read)]
+        B[(IndexedDB cache<br/>offline reads)]
         A <--> B
     end
     A <-->|Supabase JS<br/>+ RLS| C[(Supabase Postgres)]
     C -->|Realtime<br/>subscription| A
-    D[Supabase Auth<br/>email+password] --- A
+    D[Supabase Auth<br/>email + password] --- A
     E[Vercel static hosting] --- A
 ```
 
-ไม่มี API server ของตัวเอง: client คุยกับ Supabase ตรง ๆ ความปลอดภัยคุมด้วย **Row Level Security** ที่ระดับ database (ต่อให้ client โดน reverse ก็เห็นได้แค่ข้อมูล household ตัวเอง)
+There is no API server of our own: the client talks to Supabase directly and security is enforced by **Row Level Security** in the database, so even a fully reverse-engineered client can only reach its own household's rows.
 
 ---
 
-## 4. Data Model
+## 4. Data model
 
 ### 4.1 ERD
 
@@ -92,322 +97,576 @@ erDiagram
     households ||--o{ transactions : has
     households ||--o{ installments : has
     households ||--o{ budgets : has
+    households ||--o{ recurring_rules : has
+    households ||--o{ card_cycle_adjustments : has
     categories ||--o{ transactions : categorizes
     categories ||--o{ installments : categorizes
     categories ||--o{ budgets : caps
+    categories ||--o{ recurring_rules : categorizes
     accounts ||--o{ transactions : "paid from"
     cards ||--o{ transactions : "paid from"
+    cards ||--o{ card_cycle_adjustments : reconciles
     cards ||--o{ installments : "billed to"
     accounts ||--o{ installments : "billed to"
     installments ||--o{ installment_payments : has
     installment_payments |o--o| transactions : "links to"
+    recurring_rules ||--o{ transactions : generates
 ```
 
-### 4.2 Schema (Postgres)
+### 4.2 Core tables
 
 ```sql
--- ครัวเรือน: หน่วยแชร์ข้อมูล (แอพนี้มีจริง ๆ แค่ 1 แถว แต่ออกแบบให้ถูกไว้)
+-- Household: the sharing unit. In practice there is exactly one row,
+-- but modelling it properly keeps RLS simple and uniform.
 create table households (
   id          uuid primary key default gen_random_uuid(),
-  name        text not null default 'บ้านเรา',
+  name        text not null default 'Our household',
   created_at  timestamptz not null default now()
 );
 
--- สมาชิก: ผูก auth.users ของ Supabase เข้ากับ household
+-- Members: links Supabase auth.users to a household.
 create table household_members (
   id            uuid primary key default gen_random_uuid(),
-  household_id  uuid not null references households(id),
-  user_id       uuid unique references auth.users(id),  -- null ได้ตอนยังไม่ accept invite
-  display_name  text not null,                          -- ชื่อเล่นที่โชว์ทั้งแอพ
-  invite_code   text unique,                            -- ใช้ตอนชวนคนที่สอง
+  household_id  uuid not null references households(id) on delete cascade,
+  user_id       uuid unique references auth.users(id),  -- null until the invite is accepted
+  display_name  text not null,
+  color         text not null default '#3b82f6',        -- the person's colour across the whole UI
+  invite_code   text unique,
   created_at    timestamptz not null default now()
 );
 
--- owner ของข้อมูลทุกชนิด: member id หรือ null = "ร่วมกัน"
--- (ใช้ nullable FK แทน enum คนที่1/คนที่2 เพื่อให้ชื่อ/จำนวนคนยืดหยุ่น)
+-- Ownership convention for every record type below:
+--   owner_id = a member id, or null meaning "shared".
+-- (A nullable FK rather than a person1/person2 enum, so names and the
+--  number of people stay flexible.)
 
 create type account_type as enum ('bank', 'cash', 'ewallet');
 
 create table accounts (
   id             uuid primary key default gen_random_uuid(),
-  household_id   uuid not null references households(id),
+  household_id   uuid not null references households(id) on delete cascade,
   name           text not null,
   type           account_type not null default 'bank',
-  owner_id       uuid references household_members(id),   -- null = ร่วมกัน
-  anchor_balance numeric(14,2) not null default 0,        -- ยอดตั้งต้น ณ วัน anchor
-  anchor_date    date not null default current_date,      -- ดู D4: ยอดปัจจุบัน = anchor + sum(txn หลัง anchor)
+  owner_id       uuid references household_members(id),
+  anchor_balance numeric(14,2) not null default 0,   -- balance as of anchor_date (see D4)
+  anchor_date    date not null default current_date,
   sort_order     int not null default 0,
-  archived       boolean not null default false
+  archived       boolean not null default false,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  updated_by     uuid references household_members(id),
+  deleted_at     timestamptz                          -- soft delete (principle 4)
 );
 
 create table cards (
   id             uuid primary key default gen_random_uuid(),
-  household_id   uuid not null references households(id),
+  household_id   uuid not null references households(id) on delete cascade,
   name           text not null,
   credit_limit   numeric(14,2) not null,
   statement_day  int not null check (statement_day between 1 and 31),
   due_day        int not null check (due_day between 1 and 31),
-  interest_rate  numeric(5,2) not null default 0,         -- %/ปี
+  annual_interest_rate numeric(6,3) not null default 0,  -- % per year, always (see §6.4)
   owner_id       uuid references household_members(id),
-  cycle_adjustment numeric(14,2) not null default 0,      -- ดู D3: ปรับยอดเทียบ statement จริง
   sort_order     int not null default 0,
-  archived       boolean not null default false
+  archived       boolean not null default false,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  updated_by     uuid references household_members(id),
+  deleted_at     timestamptz
+);
+
+-- D3: statement reconciliation is per billing cycle, not a single field on the card.
+create table card_cycle_adjustments (
+  id            uuid primary key default gen_random_uuid(),
+  household_id  uuid not null references households(id) on delete cascade,
+  card_id       uuid not null references cards(id) on delete cascade,
+  cycle_start   date not null,                        -- identifies the cycle (see §6.1)
+  amount        numeric(14,2) not null,               -- signed delta vs. the computed total
+  note          text,
+  created_at    timestamptz not null default now(),
+  unique (card_id, cycle_start)
 );
 
 create type category_kind as enum ('income', 'expense');
 
 create table categories (
   id            uuid primary key default gen_random_uuid(),
-  household_id  uuid not null references households(id),
+  household_id  uuid not null references households(id) on delete cascade,
   name          text not null,
   kind          category_kind not null,
-  icon          text,                                     -- ชื่อ icon/emoji
+  icon          text,
   sort_order    int not null default 0,
-  archived      boolean not null default false
+  archived      boolean not null default false,
+  unique (id, kind)                                   -- supports the composite FK below
 );
+```
+
+### 4.3 Transactions (including transfers — D7)
+
+`transfer` is a third kind alongside income and expense. It moves value between two of the household's own instruments (bank → card bill payment, card → bank cash advance, bank → bank). **Transfers are excluded from every income and expense total** — they only move balances. Without this, paying a card bill would be counted as an expense on top of the purchases it settles.
+
+```sql
+create type transaction_kind as enum ('income', 'expense', 'transfer');
+create type transaction_source as enum ('manual', 'recurring', 'installment', 'import');
 
 create table transactions (
   id            uuid primary key default gen_random_uuid(),
-  household_id  uuid not null references households(id),
-  date          date not null,
-  kind          category_kind not null,                   -- รายรับ/รายจ่าย (ซ้ำกับ category เพื่อ query เร็ว)
-  category_id   uuid not null references categories(id),
+  household_id  uuid not null references households(id) on delete cascade,
+  date          date not null,                        -- plain date, always read as Asia/Bangkok
+  kind          transaction_kind not null,
+  category_id   uuid references categories(id),       -- required for income/expense, null for transfer
+  category_kind category_kind,                        -- denormalised for fast queries; kept honest by the FK below
   description   text not null default '',
   amount        numeric(14,2) not null check (amount > 0),
-  owner_id      uuid references household_members(id),    -- null = ร่วมกัน
-  account_id    uuid references accounts(id),             -- จ่ายจากบัญชี...
-  card_id       uuid references cards(id),                -- ...หรือรูดบัตร (อย่างใดอย่างหนึ่ง)
+  owner_id      uuid references household_members(id),
+
+  -- Where the money comes from, and (for transfers) where it goes.
+  from_account_id uuid references accounts(id),
+  from_card_id    uuid references cards(id),
+  to_account_id   uuid references accounts(id),
+  to_card_id      uuid references cards(id),
+
   note          text,
+  source        transaction_source not null default 'manual',
+  recurring_rule_id uuid references recurring_rules(id) on delete set null,
+  occurrence_date   date,                             -- the scheduled date this instance came from
+  confirmed     boolean not null default true,        -- false = generated, awaiting review (§6.6)
   created_by    uuid references household_members(id),
   created_at    timestamptz not null default now(),
-  check (account_id is null or card_id is null)
-);
-create index on transactions (household_id, date desc);
+  updated_at    timestamptz not null default now(),
+  updated_by    uuid references household_members(id),
+  deleted_at    timestamptz,
 
+  -- Exactly one source instrument, and a destination only for transfers.
+  constraint one_source check (num_nonnulls(from_account_id, from_card_id) = 1),
+  constraint dest_iff_transfer check (
+    case when kind = 'transfer'
+         then num_nonnulls(to_account_id, to_card_id) = 1
+         else num_nonnulls(to_account_id, to_card_id) = 0 end
+  ),
+  -- Categories apply to income/expense only, and the denormalised kind must match.
+  constraint category_iff_not_transfer check (
+    (kind = 'transfer') = (category_id is null)
+  ),
+  constraint category_kind_matches check (
+    (kind = 'transfer' and category_kind is null) or category_kind::text = kind::text
+  ),
+  foreign key (category_id, category_kind) references categories(id, kind),
+  -- Idempotent materialisation of recurring instances (§6.6).
+  unique (recurring_rule_id, occurrence_date)
+);
+create index on transactions (household_id, date desc) where deleted_at is null;
+create index on transactions (household_id, from_card_id, date) where deleted_at is null;
+```
+
+Notes:
+
+* A transfer never has a category. Income and expense always do, and `category_kind` is kept in sync by the composite foreign key — it cannot drift.
+* `unique (recurring_rule_id, occurrence_date)` is what makes recurrence generation safe to run from several devices at once. It ignores NULLs, which is correct here: manual rows have both columns null and are never deduplicated.
+* Cash advances are modelled as `transfer` from the card to a bank/cash account. The debt itself is an `installments` row (§4.5) with `is_cash_advance = true`.
+
+### 4.4 Recurring rules (D8)
+
+A rule is a template plus a schedule. It generates real transaction rows; it is not a separate kind of money.
+
+```sql
+create type recurrence_freq as enum ('weekly', 'monthly', 'yearly');
+create type month_end_rule as enum ('clamp', 'skip');   -- 31st in a 30-day month
+
+create table recurring_rules (
+  id            uuid primary key default gen_random_uuid(),
+  household_id  uuid not null references households(id) on delete cascade,
+  name          text not null,                          -- "Salary", "Car insurance", "Netflix"
+
+  -- Transaction template
+  kind          transaction_kind not null,
+  category_id   uuid references categories(id),
+  category_kind category_kind,
+  amount        numeric(14,2) not null check (amount > 0),
+  owner_id      uuid references household_members(id),
+  from_account_id uuid references accounts(id),
+  from_card_id    uuid references cards(id),
+  to_account_id   uuid references accounts(id),
+  to_card_id      uuid references cards(id),
+  note          text,
+
+  -- Schedule
+  freq          recurrence_freq not null,
+  interval      int not null default 1 check (interval > 0),  -- every N periods
+  day_of_month  int check (day_of_month between 1 and 31),    -- monthly / yearly
+  month_of_year int check (month_of_year between 1 and 12),   -- yearly
+  weekday       int check (weekday between 0 and 6),          -- weekly (0 = Sunday)
+  month_end     month_end_rule not null default 'clamp',
+  start_date    date not null,
+  end_date      date,                                         -- null = open ended
+  max_occurrences int,                                        -- optional alternative to end_date
+
+  -- Behaviour
+  auto_post     boolean not null default false,  -- true: post confirmed; false: post unconfirmed for review
+  variable_amount boolean not null default false,-- amount changes monthly (utilities) → always review
+  active        boolean not null default true,
+  last_generated_date date,                      -- watermark; generation resumes from here
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  updated_by    uuid references household_members(id),
+  deleted_at    timestamptz,
+
+  constraint one_source check (num_nonnulls(from_account_id, from_card_id) = 1),
+  constraint dest_iff_transfer check (
+    case when kind = 'transfer'
+         then num_nonnulls(to_account_id, to_card_id) = 1
+         else num_nonnulls(to_account_id, to_card_id) = 0 end
+  ),
+  constraint category_iff_not_transfer check ((kind = 'transfer') = (category_id is null)),
+  foreign key (category_id, category_kind) references categories(id, kind),
+  constraint schedule_fields check (
+    case freq
+      when 'weekly'  then weekday is not null
+      when 'monthly' then day_of_month is not null
+      when 'yearly'  then day_of_month is not null and month_of_year is not null
+    end
+  )
+);
+```
+
+`transactions.recurring_rule_id` and `recurring_rules` reference each other, so in the actual migration the two tables are created first and the `transactions → recurring_rules` foreign key is added afterwards with `alter table`.
+
+Why materialise rows rather than compute occurrences on the fly:
+
+* Every existing screen (transaction list, monthly summary, category budgets, account balances) already reads `transactions`. Materialising keeps exactly one code path.
+* Real amounts differ from the template (the electricity bill is never exactly the template amount). A materialised row can be edited; a virtual one cannot.
+* Editing or deleting a rule must not silently rewrite history. Past instances are ordinary rows and stay as they were.
+
+Future occurrences beyond today are **not** written to the database — they are projected in memory for the forward calendar (§6.6), so changing a rule instantly changes the forecast with nothing to clean up.
+
+### 4.5 Installments
+
+```sql
 create type installment_status as enum ('active', 'done', 'cancelled');
 
 create table installments (
   id              uuid primary key default gen_random_uuid(),
-  household_id    uuid not null references households(id),
+  household_id    uuid not null references households(id) on delete cascade,
   name            text not null,
   category_id     uuid references categories(id),
-  start_date      date not null,                          -- งวดที่ 1 อยู่รอบบิลที่ครอบวันนี้
+  start_date      date not null,                     -- period 1 falls in the cycle containing this date
   total_periods   int not null check (total_periods > 0),
   monthly_amount  numeric(14,2) not null,
-  card_id         uuid references cards(id),              -- ผูกบัตร...
-  account_id      uuid references accounts(id),           -- ...หรือตัดบัญชี
-  interest_rate   numeric(5,2) not null default 0,        -- ดู D5: ฟิลด์ตัวเลขจริง
-  is_cash_advance boolean not null default false,         -- ธงพิเศษสำหรับกดเงินสด
+  final_amount    numeric(14,2),                     -- last period often differs (rounding); null = same
+  card_id         uuid references cards(id),
+  account_id      uuid references accounts(id),
+  annual_interest_rate numeric(6,3) not null default 0,  -- % per year, normalised (§6.4)
+  is_cash_advance boolean not null default false,
   owner_id        uuid references household_members(id),
   note            text,
   status          installment_status not null default 'active',
-  check (card_id is null or account_id is null)
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  updated_by      uuid references household_members(id),
+  deleted_at      timestamptz,
+  constraint one_instrument check (num_nonnulls(card_id, account_id) = 1)
 );
 
--- ดู D2: การจ่ายแต่ละงวดเป็น event ไม่ใช่ตัวนับ
+-- D2: each period payment is an event, not a counter.
 create table installment_payments (
   id              uuid primary key default gen_random_uuid(),
+  household_id    uuid not null references households(id) on delete cascade,  -- denormalised for RLS (§4.7)
   installment_id  uuid not null references installments(id) on delete cascade,
-  period_no       int not null,                           -- งวดที่เท่าไหร่
+  period_no       int not null check (period_no > 0),
   paid_date       date not null default current_date,
-  transaction_id  uuid references transactions(id),       -- ผูกรายการจ่ายจริง (optional)
+  transaction_id  uuid unique references transactions(id) on delete set null,
+  created_at      timestamptz not null default now(),
   unique (installment_id, period_no)
 );
--- งวดที่จ่ายแล้ว = count(*), ยอดคงเหลือ = (total - count) * monthly_amount
+-- periods paid = count(*); outstanding = see §6.2
+```
 
+`transaction_id` is the single source of truth for whether the money actually left an account: for account-billed installments the app always creates the paired transaction when a period is marked paid (see §6.3), so balances cannot drift.
+
+### 4.6 Budgets
+
+```sql
 create table budgets (
   id            uuid primary key default gen_random_uuid(),
-  household_id  uuid not null references households(id),
+  household_id  uuid not null references households(id) on delete cascade,
   category_id   uuid not null references categories(id),
   amount        numeric(14,2) not null,
-  month         date,                                     -- null = ค่า default ทุกเดือน, ระบุ = override เดือนนั้น
-  unique (household_id, category_id, month)
+  month         date,          -- null = the default for every month; set = override for that month
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  -- NULLS NOT DISTINCT is required: without it Postgres treats every null month
+  -- as unique and allows duplicate defaults for the same category.
+  unique nulls not distinct (household_id, category_id, month)
 );
 ```
 
-### 4.3 Row Level Security (แนวคิด)
+### 4.7 Row Level Security
 
-ทุกตารางเปิด RLS ด้วย policy เดียวกัน:
+Every table carries `household_id` — including child tables such as `installment_payments` and `card_cycle_adjustments` — precisely so that one policy shape works everywhere.
 
 ```sql
--- helper: household ของ user ปัจจุบัน
+-- Helper: the current user's household. SECURITY DEFINER so it can read
+-- household_members without recursing into that table's own policy.
 create function current_household_id() returns uuid
-language sql stable security definer as $$
+language sql stable security definer set search_path = public as $$
   select household_id from household_members where user_id = auth.uid()
 $$;
 
--- ตัวอย่าง policy (ใช้ pattern เดียวกันทุกตาราง)
+-- household_members must NOT use the helper, or the policy recurses into itself.
+alter table household_members enable row level security;
+create policy self_row on household_members
+  for select using (user_id = auth.uid());
+create policy same_household on household_members
+  for select using (household_id = current_household_id());
+
+alter table households enable row level security;
+create policy own_household on households
+  for all using (id = current_household_id())
+  with check (id = current_household_id());
+
+-- Every other table, same shape:
 alter table transactions enable row level security;
 create policy member_all on transactions
   for all using (household_id = current_household_id())
   with check (household_id = current_household_id());
 ```
 
----
+Applies identically to `accounts`, `cards`, `card_cycle_adjustments`, `categories`, `transactions`, `installments`, `installment_payments`, `budgets`, `recurring_rules`.
 
-## 5. Authentication & การเชื่อมสองคน
+### 4.8 Soft delete
 
-* **Supabase Auth แบบ email + password** (มี "จำฉันไว้" session ยาว ๆ) — magic link ใช้ได้แต่บนมือถือมักสลับแอพไป Gmail แล้วหลุด flow; password ตั้งครั้งเดียวจบ
-* Flow ครั้งแรก:
-  1. คนที่ 1 สมัคร → ระบบสร้าง household + member ให้อัตโนมัติ
-  2. หน้า Settings มีปุ่ม "ชวนอีกคน" → สร้าง invite code / ลิงก์
-  3. คนที่ 2 สมัครผ่านลิงก์ → ผูกเข้า household เดียวกัน
-* หลัง login ค้าง session ไว้นาน (refresh token ของ Supabase) — เปิดแอพแล้วใช้ได้เลย ไม่ต้อง login ซ้ำทุกครั้ง ตอบโจทย์ "ไม่ต้องการระบบ login ซับซ้อน" โดยไม่เสียความปลอดภัย
-* `owner_id` ของ transaction ตั้ง default = คนที่ login อยู่ (เปลี่ยนได้ตอนกรอก)
+`deleted_at` on every user-editable table backs principle 4. Rules:
+
+* All application reads go through views (`v_transactions`, …) that filter `deleted_at is null`. Screens never query base tables.
+* Deleting sets `deleted_at`; the undo toast clears it. Undo therefore works from any device, not just the one that deleted.
+* A nightly (or on-demand) purge removes rows soft-deleted more than 30 days ago.
 
 ---
 
-## 6. Logic การเงินหลัก (หัวใจของแอพ — ต้องมี unit test ครบ)
+## 5. Authentication and pairing
 
-รวมไว้ใน module เดียว เช่น `src/lib/finance/` ใช้ร่วมกันทุกหน้าจอ (หลักการข้อ 3)
+* **Supabase Auth with email + password** and a long-lived session. Magic links tend to break the flow on mobile (app switch to Gmail); a password is set once.
+* First-run flow:
+  1. Person 1 signs up → the system creates the household and their member row.
+  2. Settings has an "invite your partner" button → generates an invite code / link.
+  3. Person 2 signs up through the link → joins the same household.
+* The Supabase refresh token keeps the session alive, so the app opens straight into the data. This satisfies "no complex login" without giving up security.
+* `owner_id` on a new transaction defaults to the logged-in member and can be changed in the form.
 
-### 6.1 Billing Cycle Engine (ตอบโจทย์ #2 ของสเปกโดยตรง)
+---
 
-แก้ปัญหา D1 — แปลง "เดือนปฏิทิน" ให้เป็น "รอบบิลของแต่ละบัตร":
+## 6. Core financial logic
+
+All of it lives in one module, `src/lib/finance/`, shared by every screen (principle 3), and is the main target for unit tests.
+
+### 6.1 Billing cycle engine
+
+Converts calendar months into each card's real billing cycles (D1):
 
 ```
-รอบบิลของบัตร (statement_day = S, due_day = D):
-  รอบบิล k ครอบวันที่:  (S ของเดือน M-1) + 1  →  S ของเดือน M
-  วันครบกำหนดจ่าย:      D ของเดือน M   (ถ้า D <= S ให้เลื่อนเป็น D ของเดือน M+1)
-  กรณีเดือนสั้น (S=31 แต่เดือนมี 30 วัน): ใช้วันสุดท้ายของเดือน
+For a card with statement_day = S and due_day = D:
+  Cycle k covers:  (S of month M-1) + 1  →  S of month M
+  Payment due on:  D of month M, or D of month M+1 if D <= S
+  Short months (S = 31 in a 30-day month): use the last day of the month
+  A cycle is identified by its start date (cycle_start), which is what
+  card_cycle_adjustments keys on.
 ```
 
-ฟังก์ชันหลัก:
+Key functions:
 
 ```ts
-// งวดที่ n ของ installment เกิดวันไหน (start_date + (n-1) เดือน)
+// Which date does period n of an installment fall on?
+// start_date + (n-1) months, clamped to the last day of short months
+// (31 Jan + 1 month = 28/29 Feb).
 periodDate(inst: Installment, n: number): Date
 
-// รายการผ่อน/transaction ตกอยู่รอบบิลไหนของบัตรนั้น
-cycleOf(card: Card, date: Date): { start: Date; end: Date; dueDate: Date }
+// Which billing cycle does a date fall into for a given card?
+cycleOf(card: Card, date: Date): Cycle   // { start, end, dueDate }
 
-// ยอดที่ต้องจ่ายของบัตรในรอบบิลหนึ่ง =
-//   sum(transactions ที่รูดบัตรในรอบ) + sum(ค่างวด installment ที่งวดตกในรอบ) + cycle_adjustment
-cycleBill(card: Card, cycle: Cycle, txns, insts): number
+// What is due on a card for one cycle?
+//   sum(transactions charged to the card within the cycle, excluding transfers TO the card)
+// + sum(installment periods falling in the cycle)
+// + the cycle's adjustment row, if any
+cycleBill(card: Card, cycle: Cycle, txns, insts, adjustments): number
 
-// ตารางล่วงหน้า 12 เดือน: ต่อบัตร/บัญชี ต่อรอบบิล → ใช้ทั้งหน้า Plan และ Dashboard
-forwardSchedule(cards, accounts, insts, months = 12): ScheduleRow[]
+// 12-month forward table per card/account per cycle. Includes projected
+// recurring occurrences (§6.6). Powers both the Plan page and the Dashboard.
+forwardSchedule(ctx, months = 12): ScheduleRow[]
 ```
 
-### 6.2 ยอดผ่อนและวงเงินบัตร
+Transfers *to* a card are bill payments and must be excluded from `cycleBill` (they settle it) while still reducing the paying account's balance.
+
+### 6.2 Installment balances and credit utilisation
 
 ```
-งวดที่จ่ายแล้ว        = count(installment_payments)
-ยอดผ่อนคงเหลือ        = (total_periods - งวดที่จ่ายแล้ว) × monthly_amount
-วงเงินใช้ไป (ต่อบัตร)  = ยอดรอบบิลปัจจุบัน + ยอดผ่อนคงเหลือของ installments ที่ผูกบัตร
-วงเงินเหลือ           = credit_limit - วงเงินใช้ไป
+periods paid          = count(installment_payments)
+remaining periods     = total_periods - periods paid
+outstanding           = remaining periods × monthly_amount
+                        (substituting final_amount for the last period if set)
+
+-- The current cycle's periods are already inside cycleBill, so they must not
+-- be counted again here. This was the double count in v1.
+future installment charges = outstanding − (installment periods falling in the current cycle)
+
+credit used (per card) = cycleBill(current cycle)
+                       + unpaid balance carried from earlier cycles
+                       + future installment charges
+credit available       = credit_limit − credit used
 ```
 
-### 6.3 ยอดบัญชี (reconcile pattern — D4)
+### 6.3 Account balances (reconcile pattern — D4)
 
 ```
-ยอดปัจจุบัน = anchor_balance
-            + sum(รายรับเข้าบัญชี หลัง anchor_date)
-            - sum(รายจ่ายจากบัญชี หลัง anchor_date)
-กด "Reconcile" = กรอกยอดจริงจากแอพธนาคาร → ระบบตั้ง anchor ใหม่เป็นวันนี้
+current balance = anchor_balance
+                + sum(income into the account after anchor_date)
+                − sum(expenses from the account after anchor_date)
+                + sum(transfers into the account after anchor_date)
+                − sum(transfers out of the account after anchor_date)
+                (confirmed rows only — §6.6)
+
+"Reconcile" = user types the real balance from their banking app
+            → the system writes a new anchor at today's date
 ```
 
-### 6.4 แผนปลดหนี้ (Avalanche + Simulator)
+For installments billed directly to an account, marking a period paid always creates the paired transaction (`installment_payments.transaction_id`). That transaction is the only thing that moves the balance, so there is no path to double counting or to silent drift.
 
-* เรียง installments ที่ active ตาม `interest_rate` มาก → น้อย (cash advance 9.99% ขึ้นบนสุดอัตโนมัติ, tie-break ด้วยยอดคงเหลือน้อยก่อนเพื่อปิดเป็นรายการ ๆ)
-* **Simulator**: ผู้ใช้กรอก "เงินโปะเพิ่มต่อเดือน" → จำลองการโปะตามลำดับ avalanche แสดง (ก) ปิดหนี้เร็วขึ้นกี่เดือน (ข) ประหยัดดอกเบี้ยประมาณเท่าไหร่ — ตัวเลข "ประหยัดได้ X บาท" คือแรงจูงใจที่ทำให้ฟีเจอร์นี้ถูกใช้จริง
-* หมายเหตุ: ดอกเบี้ยผ่อน 0% ที่มี "ค่าธรรมเนียม" ให้กรอกเป็น rate เทียบเท่าในฟิลด์เดียวกัน
+### 6.4 Interest rates and the payoff plan
 
-### 6.5 ตัวเลขหน้า Dashboard (ลำดับความสำคัญตาม feedback ผู้ใช้)
+**Unit normalisation.** The source sheet mixes units: "installment 0.74%" is per *month*, while a card's "9.99%" style rate is per *year*. Every rate in the schema is stored as **% per year**. The import converts monthly figures with `annual = monthly × 12`, and the installment form asks explicitly which unit the user is entering. Without this, avalanche ranking silently puts a 0.74%/month plan (8.9%/yr) below a 5%/yr card.
 
-* **การ์ดหลัก (บนสุด): สรุปรายเดือน** — รายรับ / รายจ่าย / คงเหลือ ของเดือนที่เลือก แยกตามคน — ตอบคำถาม "ต่อเดือนใช้จ่ายอะไรเท่าไหร่"
-* **การ์ดรอง: รอบบิลถัดไป** — "ต้องเตรียมเงิน X บาท" = sum ของ `cycleBill` ทุกบัตรที่ยังไม่ถึง due date ถัดไป + งวด installment ที่ตัดบัญชีตรงในช่วงเดียวกัน — เรียงตาม due date พร้อม countdown "อีก N วัน" — ตอบคำถาม "เหลือบิลอะไรบ้าง ต้องเตรียมเท่าไหร่"
+**Avalanche.** Rank active installments by `annual_interest_rate` descending — cash advances float to the top automatically — with ties broken by smallest outstanding balance first, so individual debts actually close.
+
+**Simulator.** The user enters an extra monthly amount; the model applies it in avalanche order and reports (a) how many months earlier the debt clears and (b) approximately how much interest is saved. That saved-baht figure is what makes the feature get used.
+
+0% plans that carry a fee are entered as the equivalent annualised rate in the same field.
+
+### 6.5 Dashboard figures
+
+* **Primary card — monthly summary**: income / expense / net for the selected month, split by person. Transfers are excluded from both sides. Answers "what did we spend this month?"
+* **Secondary card — next billing cycle**: "set aside ฿X" = the sum of `cycleBill` across all cards whose next due date has not passed, plus installment periods billed directly to accounts in the same window, plus projected recurring expenses (§6.6) falling before that date — listed by due date with an "in N days" countdown. Answers "what's coming and how much do I need?"
+
+### 6.6 Recurrence engine (D8)
+
+```ts
+// Every scheduled date for a rule in a window, honouring interval, end_date,
+// max_occurrences and the month_end rule (31st → 28/29/30 to clamp, or skipped).
+occurrences(rule: RecurringRule, from: Date, to: Date): Date[]
+
+// Materialise everything due up to `today` that does not exist yet.
+// Safe to run concurrently: insert ... on conflict (recurring_rule_id,
+// occurrence_date) do nothing, backed by the unique constraint in §4.3.
+materialiseDue(rules, today): Transaction[]
+
+// Future occurrences as in-memory rows for the forward calendar. Never written.
+projectForward(rules, from, to): ProjectedTransaction[]
+```
+
+**When it runs.** On app open and on regaining focus, the client generates anything due up to today. No cron or edge function is needed: the app is opened daily, the unique constraint makes repeats harmless, and a gap of any length is caught up in a single pass on the next open.
+
+**Confirmed vs. unconfirmed.** A rule with `auto_post = true` (fixed, reliable amounts such as salary or a subscription) writes `confirmed = true` rows that count immediately. Otherwise, and always when `variable_amount = true`, rows are written with `confirmed = false`: they appear in a "review" strip at the top of the Transactions tab, are excluded from account balances and monthly totals until confirmed, and the review action is a single tap (or an amount edit, then tap).
+
+**Editing a rule** changes future occurrences only. Already-materialised rows are ordinary transactions and are untouched; the UI says so explicitly when saving. Deleting a rule offers "keep past entries" (default) or "delete generated entries too".
+
+**Relationship to installments.** Installments are *not* recurring rules — they have a known number of periods, a payoff balance and an interest rate, and they feed the debt plan. Recurring rules are open-ended obligations. Keeping them separate keeps both models honest.
 
 ---
 
-## 7. การออกแบบ UX
+## 7. UX design
 
-### 7.1 โครงหน้าจอ (mobile-first)
+### 7.1 Screen structure (mobile-first)
 
 ```
 ┌──────────────────────────────┐
-│  ‹ ก.ค. 2569 ›   [คน1|คน2|รวม|ทั้งหมด]   ← header ติดบนทุกหน้า
+│  ‹ Jul 2026 ›  [P1|P2|Shared|All]   ← sticky header on every tab
 │                              │
-│         เนื้อหาแท็บ           │
+│         tab content          │
 │                              │
-│                        (+)   │  ← FAB เพิ่มรายการ ลอยทุกหน้า
+│                        (+)   │  ← FAB, floating on every tab
 ├──────────────────────────────┤
-│ ภาพรวม  รายการ  ผ่อน  บัญชี  แผน │  ← bottom nav 5 แท็บ
+│ Home  Txns  Plans  Accounts  Plan │  ← 5-tab bottom nav
 └──────────────────────────────┘
 ```
 
-* **ตัวเลือกเดือน + filter คน อยู่ที่เดียว มีผลทุกแท็บ** — ไม่ต้องตั้งใหม่ทุกหน้า (จำค่าไว้ใน URL/state)
-* Settings ย้ายไปอยู่หลัง avatar มุมขวาบน (ไม่เปลืองแท็บ)
-* Desktop: bottom nav กลายเป็น sidebar, เนื้อหาเป็น 2 คอลัมน์ — component เดิมทั้งหมด
+* **The month picker and person filter live in one place and apply to every tab** — never re-set per screen (state persisted in the URL).
+* Settings sits behind the avatar in the top-right rather than consuming a tab.
+* Desktop: the bottom nav becomes a sidebar and content goes two-column. Same components throughout.
 
-### 7.2 Quick-add: flow ที่สำคัญที่สุด (หลักการข้อ 2)
+### 7.2 Quick-add: the most important flow (principle 2)
 
-กด FAB → bottom sheet เดียวจบ:
+Tap the FAB → a single bottom sheet:
 
-1. **ตัวเลขขึ้นก่อน** (numpad เปิดอัตโนมัติ) — สิ่งแรกที่ผู้ใช้รู้คือจำนวนเงิน
-2. หมวดหมู่เป็น **grid ไอคอน** (ไม่ใช่ dropdown) เรียงตามที่ใช้บ่อย
-3. ค่า default ฉลาด ๆ: วันที่ = วันนี้, ประเภท = รายจ่าย, เจ้าของ = คนที่ login, บัญชี/บัตร = อันล่าสุดที่ใช้กับหมวดนั้น
-4. คำอธิบาย + หมายเหตุ = optional พับไว้
-5. กดบันทึก → optimistic update เห็นผลทันที, toast มีปุ่ม undo
+1. **The amount comes first** (numpad opens automatically) — it is the first thing the user knows.
+2. Categories are an **icon grid**, not a dropdown, ordered by frequency of use.
+3. Smart defaults: date = today, kind = expense, owner = the logged-in person, account/card = the one last used with that category.
+4. Description and note are optional and collapsed.
+5. Save → optimistic update, with an undo button in the toast.
 
-เป้าหมาย: กรณีทั่วไป (ค่ากาแฟ 65 บาท) = **แตะ 4 ครั้ง**: FAB → 65 → หมวดอาหาร → บันทึก
+Target: the common case (a ฿65 coffee) is **four taps**: FAB → 65 → Food → Save.
 
-### 7.3 หน้าอื่น ๆ (เฉพาะจุดที่ต่างจาก baseline)
+Transfers are a third segment in the same sheet ("Income / Expense / Transfer"), which swaps the category grid for a from/to instrument picker. Card-bill payment is offered as a preset from the card detail page with the amount pre-filled from `cycleBill`.
 
-* **ภาพรวม**: บนสุดคือสรุปรายเดือน (หลัก) → การ์ด "ต้องเตรียมเงินรอบบิลถัดไป" (รอง) เรียงตาม due date ใกล้สุด → กราฟ 6 เดือน → bar หมวดหมู่ (แตะหมวด → เจาะดูรายการ) — ดู 6.5
-* **รายการ**: list จัดกลุ่มตามวัน, แถวเดียวเห็น หมวด(ไอคอน)/ชื่อ/บัญชี/owner(สี)/จำนวน, ปัดซ้ายเพื่อแก้/ลบ, ค้นหาข้อความได้
-* **ผ่อน**: card ต่อรายการ มี progress bar, ป้ายเตือนดอกเบี้ย ≥5% สีแดง, ปุ่ม "จ่ายงวดนี้" กดครั้งเดียว (สร้าง `installment_payment` + เสนอสร้าง transaction คู่กันอัตโนมัติ), รายการที่ผ่อนจบย้ายไปส่วน "เสร็จแล้ว" พับไว้
-* **บัญชี**: สองส่วน (บัญชี/บัตร) ตาม baseline; บัตรโชว์ mini-gauge วงเงินใช้ไป/เหลือ + วันสรุปยอด/due ถัดไป; ปุ่ม Reconcile ต่อบัญชี
-* **แผน**: 3 sub-tab ตาม baseline — ปฏิทินผ่อน (ตาราง เดือน × บัตร/บัญชี, เดือนที่ยอดสูงไฮไลต์), งบประมาณ (bar เขียว/เหลือง/แดง), ปลดหนี้ (avalanche + simulator)
+### 7.3 Other screens (only where they differ from the baseline)
 
-### 7.4 ภาษาและรูปแบบ
+* **Home**: monthly summary first (primary) → "set aside for the next billing cycle" (secondary), ordered by nearest due date → six-month trend → category bars (tap a category to drill into its transactions). See §6.5.
+* **Transactions**: a review strip at the top when unconfirmed recurring rows exist; below it, a list grouped by day. Each row shows category icon, description, instrument, owner colour and amount. Swipe to edit/delete, full-text search. Transfers render with a distinct arrow treatment and are visibly excluded from the totals.
+* **Installments**: a card per plan with a progress bar, a red badge for rates ≥5% p.a., and a one-tap "pay this period" (creates the `installment_payment` plus its paired transaction). Completed plans collapse into a "finished" section.
+* **Accounts**: two sections (accounts and cards) per the baseline. Cards show a mini gauge of used vs. available credit and the next statement/due dates; accounts have a Reconcile button. Card detail lists the current cycle's charges and offers "reconcile to statement" (writes a `card_cycle_adjustments` row).
+* **Plan**: four sub-tabs — forward calendar (months × card/account, high months highlighted, projected recurring items shown in a lighter tone and labelled), budgets (green/amber/red bars), debt payoff (avalanche plus simulator), and **recurring rules** (list of rules with next occurrence date, amount, owner; toggle active; add/edit).
 
-* UI ภาษาไทยทั้งหมด, จำนวนเงิน format `1,234.50` สกุลบาท, วันที่ พ.ศ. แบบย่อ ("21 ก.ค. 69")
-* สีประจำคน (เช่น คนที่ 1 = ฟ้า, คนที่ 2 = ส้ม, ร่วมกัน = ม่วง) ใช้สม่ำเสมอทุกหน้าจอ ทั้ง chip, ขอบการ์ด, กราฟ
+### 7.4 Language and formatting
 
----
+* The UI is entirely in Thai. Amounts are formatted `1,234.50` in baht; dates use the abbreviated Buddhist-era form ("21 ก.ค. 69").
+* Each person has a colour (person 1 blue, person 2 orange, shared purple) used consistently in chips, card borders and charts. It is stored on `household_members.color`.
 
-## 8. Real-time Sync และ Offline
-
-* **Sync**: subscribe Supabase Realtime (postgres_changes ของ household ตัวเอง) → invalidate TanStack Query → UI อัปเดตเองภายใน ~1 วินาที เมื่ออีกคนบันทึก ไม่ต้องทำ CRDT/merge เพราะ conflict จริงแทบไม่มี (คนละ record กัน) — record เดียวกันใช้ last-write-wins พอ
-* **Offline (เฟสแรก: read-only)**:
-  * PWA cache app shell → เปิดแอพได้เสมอ
-  * TanStack Query persist ลง IndexedDB → เห็นข้อมูลล่าสุดที่เคยโหลด พร้อม banner "ออฟไลน์ — ข้อมูล ณ เวลาที่ sync ล่าสุด"
-  * การเขียนตอนออฟไลน์: เฟสแรกแจ้งว่าต้องต่อเน็ต (ปุ่ม disabled + เหตุผล) — write-queue แบบ sync ทีหลังมี edge case เยอะ (แก้ record เดียวกันสองเครื่อง) เก็บไว้เฟสหลังถ้าจำเป็นจริง
-* **PWA**: manifest + icon → "Add to Home Screen" ได้ทั้ง iOS/Android แก้ปัญหา "ไม่มี native app icon" ของต้นแบบ
+*(These design documents are in English for implementation; the product UI is Thai.)*
 
 ---
 
-## 9. การ Import จาก Google Sheet
+## 8. Real-time sync and offline
 
-* เขียนเป็น script (`scripts/import-sheet.ts`) รับไฟล์ CSV ที่ export จาก 4 แท็บ: รายการเคลื่อนไหว, Installment, Credit Card, บัญชี
-* Mapping สำคัญ:
-  * ดอกเบี้ยใน "หมายเหตุ" ("ผ่อน 0.74%", "ผ่อน 9.99%") → regex ดึงเป็น `interest_rate`; 9.99% ตั้ง `is_cash_advance = true`
-  * "งวดที่ชำระแล้ว = n" → generate `installment_payments` งวด 1..n ย้อนหลัง (paid_date = วันที่งวดตาม `periodDate`)
-  * รายการที่ไม่ระบุคน → owner = ร่วมกัน (ไปแก้ทีหลังได้)
-* รันซ้ำได้ (idempotent — ล้างข้อมูล household แล้ว insert ใหม่ตาม baseline 4.6) และมีปุ่ม trigger ใน Settings
-* หลัง import แสดงหน้าสรุป: จำนวน record ต่อชนิด + รายการที่ parse ไม่ได้ให้ตรวจ
+* **Sync**: subscribe to Supabase Realtime (`postgres_changes` scoped to the household) → invalidate TanStack Query → the UI updates within about a second when the other person records something. No CRDT or merge logic: genuine conflicts are almost non-existent (different records), and same-record conflicts are last-write-wins, with `updated_at` / `updated_by` recorded so it is at least visible who changed what.
+* **Offline, phase one: read-only**
+  * The PWA caches the app shell, so the app always opens.
+  * TanStack Query persists to IndexedDB, so the last-loaded data is visible behind an "offline — data as of <time>" banner.
+  * Writes while offline are disabled in phase one, with the reason shown on the disabled button. A write queue has too many edge cases (the same record edited on two devices) to be worth it before the app is otherwise finished.
+* **PWA**: manifest and icons give "Add to Home Screen" on iOS and Android, fixing the prototype's missing app icon.
+* **Local data is sensitive.** The IndexedDB cache holds the household's full financial history in plaintext on the device. Logging out must clear the cache and the Supabase session, and Settings needs an explicit "clear data on this device" action. This is a stated trade-off of offline support, not an oversight.
 
 ---
 
-## 10. แผนการพัฒนา (Roadmap)
+## 9. Importing from the Google Sheet
 
-| เฟส | ขอบเขต | เกณฑ์เสร็จ |
+* A script, `scripts/import-sheet.ts`, consuming CSV exports of four tabs: Transactions, Installment, Credit Card, Accounts.
+* Key mappings:
+  * Interest rates in the note field ("installment 0.74%", "installment 9.99%") → regex-extracted, **converted to % per year** (§6.4); 9.99% entries set `is_cash_advance = true`.
+  * "Periods paid = n" → generate `installment_payments` for periods 1..n with `paid_date` from `periodDate`.
+  * Records without a person → owner = shared (editable later).
+  * Card-bill payments in the sheet → `transfer` rows, not expenses (D7), so historical monthly totals are correct from day one.
+  * Obvious repeating items (salary, insurance, phone) are reported at the end as **suggested recurring rules**; the user accepts or ignores each. The import never creates rules silently.
+* **Upsert, not wipe.** Every imported row carries `source = 'import'` and a `source_key` (sheet tab + row identity) with a unique index; re-running updates matching rows and inserts new ones. It never touches rows created in the app. The v1 plan ("clear the household, then insert") would have destroyed real data the moment the re-import button was pressed after phase 1 — it is replaced by this.
+* After importing, a summary screen shows record counts by type and every row that failed to parse, for review.
+
+---
+
+## 10. Roadmap
+
+| Phase | Scope | Done when |
 |---|---|---|
-| **0. Foundation** | ตั้งโปรเจกต์ Vite+TS+Tailwind, Supabase (schema+RLS+migration), CI (typecheck+test), deploy Vercel | เปิด URL ได้, login ได้, DB มี schema ครบ |
-| **1. Core บันทึก** | Auth+invite, Accounts/Cards/Categories CRUD, Transactions + quick-add, import จาก Sheet | ทั้งสองคนใช้แทน sheet ได้ในชีวิตประจำวัน |
-| **2. ผ่อน + รอบบิล** | Installments + จ่ายงวด, Billing Cycle Engine + unit tests, Dashboard "ต้องเตรียมเงิน", วงเงินบัตร | ตัวเลข "ต้องจ่ายต่อบัตรต่อรอบบิล" ตรงกับ sheet เดิม |
-| **3. วางแผน** | ปฏิทินผ่อน 12 เดือน, งบประมาณรายหมวด, Avalanche + simulator | ใช้ตัดสินใจโปะหนี้ได้จริง |
-| **4. Polish** | PWA + offline read, Realtime sync, dark mode, กราฟครบ, reconcile | ติดตั้งบนมือถือทั้งสองเครื่อง ใช้ลื่น |
-| **5. อนาคต** | วางแผนลงทุน/เกษียณ (ยังไม่ออกแบบ — คุยเพิ่มตอนถึงเฟส), แจ้งเตือน due date (push), export ข้อมูล | — |
+| **0. Foundation** | Vite + TS + Tailwind project, Supabase (schema, RLS, migrations), CI (typecheck + test), Vercel deploy | The URL opens, login works, the schema is complete |
+| **1. Core capture** | Auth + invite, accounts/cards/categories CRUD, transactions including transfers, quick-add, recurring rules, sheet import, **read-only per-cycle card totals** | Both people use it instead of the sheet day to day, and the per-card, per-cycle figure matches the sheet |
+| **2. Installments and cycles** | Installments + period payments, full Billing Cycle Engine with unit tests, Dashboard "set aside", credit utilisation | The "due per card per cycle" figure matches the old sheet for every card |
+| **3. Planning** | 12-month forward calendar (including recurring projections), category budgets, avalanche + simulator | It can actually drive a payoff decision |
+| **4. Polish** | PWA + offline reads, realtime sync, dark mode, full charts, reconcile | Installed on both phones and pleasant to use |
+| **5. Future** | Investment and retirement planning (undesigned), due-date push notifications, data export | — |
 
-> เฟส 1 คือจุด "ใช้แทน sheet ได้" — ควรไปให้ถึงเร็วที่สุดแล้วให้ผู้ใช้จริงป้อน feedback ก่อนทำเฟสถัดไป
+> Phase 1 is the "can replace the sheet" milestone and should be reached as fast as possible, then validated with real use before phase 2 begins. Note that the per-cycle card total moved into phase 1 as a read-only view: it is the single most valuable thing the old sheet produced, so the app cannot claim to replace the sheet without it.
 
 ---
 
-## 11. ความเสี่ยง / ข้อควรระวัง
+## 11. Risks and cautions
 
-* **ความถูกต้องของ logic รอบบิล** คือความเสี่ยงอันดับหนึ่ง — ตัวเลขผิดแปลว่าเตรียมเงินผิด ต้องมี unit test cover กรณี: วันสรุปยอดปลายเดือน (29/30/31), due ข้ามเดือน, งวดแรก/งวดสุดท้าย, ปีอธิกสุรทิน และ**เทียบผลกับตัวเลขจริงใน sheet เดิมทุกบัตรก่อนเชื่อ**
-* **ข้อมูลการเงินละเอียดอ่อน** — เปิด RLS ทุกตาราง, ไม่เก็บเลขบัตรจริง (เก็บแค่ชื่อเรียก), ระวังไม่ log ข้อมูลเงินขึ้น analytics ใด ๆ
-* **Timezone** — เก็บ `date` เป็น date เพลน ๆ (ไม่ใช่ timestamp) ตีความตามเวลาไทยเสมอ กันเคสบันทึกตอนเที่ยงคืนแล้วตกผิดวัน/ผิดรอบบิล
-* **Free tier ของ Supabase** — project pause เมื่อไม่มี traffic 7 วัน; แอพที่ใช้ทุกวันไม่โดน แต่ควรรู้ไว้ (มี cron ping เป็น mitigation ได้)
+* **Billing-cycle correctness is risk number one.** A wrong number means the wrong amount of cash set aside. Unit tests must cover: statement days at month end (29/30/31), due dates crossing into the next month, first and last periods, and leap years — and **the output must be reconciled against the real figures in the old sheet, for every card, before it is trusted.**
+* **Recurrence correctness is risk number two.** A duplicated or missed salary silently corrupts the monthly summary. Tests must cover: the same rule generated concurrently from two devices, a rule edited mid-stream, `day_of_month = 31` under both `clamp` and `skip`, catching up after a long absence, and end conditions (`end_date` and `max_occurrences`).
+* **Sensitive financial data** — RLS on every table, never store real card numbers (display names only), never send financial values to any analytics service, and clear the local cache on logout (§8).
+* **Timezone** — store `date` as a plain date, not a timestamp, always interpreted as Asia/Bangkok, so a record entered near midnight cannot land in the wrong day or the wrong billing cycle.
+* **Supabase free tier** — projects pause after seven days with no traffic. Daily use avoids it, but a scheduled ping is available as mitigation.

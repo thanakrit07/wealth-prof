@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "backend-development@claude-code-workflows": true
+  }
+}

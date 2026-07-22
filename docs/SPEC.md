@@ -1,104 +1,105 @@
-# Wealth Prof — สเปกเบื้องต้น
+# Wealth Prof — Product Spec
 
-เอกสารนี้สรุปจุดประสงค์และรายละเอียดของแอพจากบทสนทนาต้นทาง เพื่อใช้เป็นจุดตั้งต้นในการออกแบบ/พัฒนาใหม่ใน Claude Code (repo: `thanakrit07/wealth-prof`)
+This document captures the purpose and requirements of the app, distilled from the original conversation. It is the starting point for the design and implementation in this repo (`thanakrit07/wealth-prof`).
 
-## 1. จุดประสงค์
+## 1. Purpose
 
-สร้างแอพจัดการการเงินส่วนตัวสำหรับ **คู่รัก 2 คน** ใช้ร่วมกัน เพื่อ:
+A shared personal-finance app for **a couple (2 people)**, built to:
 
-1. **รู้ว่าเงินถูกใช้ไปกับอะไรบ้าง** — ติดตามรายรับ-รายจ่าย แยกได้ว่าเป็นของใคร
-2. **รู้ว่าต้องเตรียมเงินเท่าไหร่ในแต่ละรอบบิล** — โดยเฉพาะภาระผ่อนสินค้า/บัตรเครดิตที่มีหลายรายการพร้อมกัน
-3. **วางแผนจัดการหนี้** — รู้ว่าควรโปะหนี้ก้อนไหนก่อนเพื่อประหยัดดอกเบี้ย
-4. *(เป้าหมายระยะถัดไป ยังไม่ได้ทำ)* วางแผนลงทุนและวางแผนเกษียณ
+1. **Show where the money goes** — track income and expenses, attributable to each person.
+2. **Show how much cash to set aside each billing cycle** — especially for the many concurrent installment plans and credit-card balances.
+3. **Support debt planning** — know which debt to pay down first to save the most interest.
+4. *(Later goal, not yet designed)* Investment planning and retirement planning.
 
-ต้นทางของโปรเจกต์คือ Google Sheet ที่ผู้ใช้บันทึกเองมานาน มีโครงสร้างข้อมูลละเอียดอยู่แล้ว (ดูหัวข้อ 5) แต่ใช้งานผ่านมือถือลำบาก และไม่ได้แยกรายรับ-รายจ่ายของทั้งสองคน — จุดประสงค์ของแอพใหม่คือแก้ 2 ปัญหานี้ พร้อมเพิ่มความสามารถวางแผนที่ sheet เดิมทำไม่ได้
+The project originates from a Google Sheet the user has maintained for a long time. The sheet already has a detailed data structure (see §5), but it is painful to use on a phone and does not separate the two people's income and expenses. The new app must fix those two problems and add planning capabilities the sheet cannot provide.
 
-## 2. ผู้ใช้งาน
+## 2. Users
 
-* คู่รัก 2 คน ใช้ร่วมกันบนอุปกรณ์คนละเครื่อง (มือถือเป็นหลัก, เว็บเป็นรอง)
-* ไม่ต้องการระบบ login ซับซ้อน — ในต้นแบบปัจจุบันใช้ shared storage แบบไม่มี auth (ทุกคนที่มีลิงก์เห็นข้อมูลเดียวกัน) ซึ่ง **ไม่เหมาะกับ production** ควรออกแบบ auth จริงตอนสร้างใหม่ (ดูหัวข้อ 7)
+* Two people, on separate devices. Mobile is the primary surface; web/desktop is secondary.
+* No appetite for a complex login system. The current prototype uses shared storage with no auth at all (anyone with the link sees everything), which is **not acceptable for production** — real auth must be designed in (see §7).
 
-## 3. Pain points ที่พบจากข้อมูลจริงใน Sheet เดิม
+## 3. Pain points observed in the real sheet data
 
-ระหว่างวิเคราะห์ sheet ต้นทาง พบประเด็นเหล่านี้ ซึ่งเป็นแรงจูงใจของฟีเจอร์ต่างๆ:
+These observations from the source sheet motivate the feature set:
 
-* มีบัตรเครดิต/บัญชีผ่อนหลายใบ (KTC, CardX, CardXSpeedyCash, UOB Premier, UOB Cash Plus, Spaylater) วงเงินรวม ~680,000 บาท
-* บางเดือน (ก.พ., เม.ย., พ.ค., มิ.ย. 2026) รายจ่ายบัตรเครดิตสูงกว่าหรือใกล้เคียงรายรับมาก เนื่องจากผ่อนสินค้าหลายรายการพร้อมกัน
-* มีการกดเงินสด (cash advance) 3 ก้อน ดอกเบี้ยสูงถึง 9.99% ซึ่งแพงกว่ารายการผ่อนปกติ (0-0.74%) มาก — เป็นหนี้ที่ควรโปะก่อน
-* "เงินคงเหลือที่ใช้ได้" บางเดือนเหลือต่ำมาก (~3,600 บาท) สะท้อนว่าสภาพคล่องตึง
-* Sheet เดิมไม่แยกรายรับ-รายจ่ายของสองคน ทำให้ตัวเลขรายรับไม่สะท้อนความจริง
+* Multiple credit cards / installment accounts (KTC, CardX, CardX SpeedyCash, UOB Premier, UOB Cash Plus, Spaylater) with a combined limit of roughly ฿680,000.
+* In several months (Feb, Apr, May, Jun 2026) credit-card outflow is higher than or close to total income, because many installment plans run concurrently.
+* Three cash-advance balances carry interest as high as 9.99%, far more expensive than the regular installment plans (0–0.74%). These should be paid down first.
+* "Money left to spend" drops very low in some months (~฿3,600), showing tight liquidity.
+* The sheet does not separate the two people's income and expenses, so the income figures do not reflect reality.
 
-## 4. ฟีเจอร์ (ตามที่ต้นแบบปัจจุบันมี — ใช้เป็น baseline)
+## 4. Features (from the current prototype — used as the baseline)
 
-### 4.1 ภาพรวม (Dashboard)
+### 4.1 Dashboard
 
-* สรุปรายรับ/รายจ่าย/คงเหลือของเดือนที่เลือก แยกตามคน (คนที่ 1 / คนที่ 2 / ร่วมกัน)
-* ภาระผ่อนต่อเดือน (รวมยอดงวดที่ยังไม่จ่ายครบ)
-* กราฟแนวโน้มรายรับ-รายจ่าย 6 เดือนล่าสุด
-* สรุปรายจ่ายตามหมวดหมู่ของเดือนที่เลือก (bar list)
+* Income / expense / balance summary for the selected month, split by person (person 1 / person 2 / shared).
+* Monthly installment burden (total of periods not yet paid).
+* Six-month income-vs-expense trend chart.
+* Expense-by-category summary for the selected month (bar list).
 
-### 4.2 รายการ (Transactions)
+### 4.2 Transactions
 
-* เพิ่ม/แก้ไข/ลบ รายการรายรับ-รายจ่าย
-* ฟิลด์: วันที่, ประเภท (รายรับ/รายจ่าย), หมวดหมู่, รายการ, จำนวนเงิน, เจ้าของ (คนที่ 1/2/ร่วมกัน), บัญชี/บัตร
-* กรองตามเดือน และตามคน
+* Create / edit / delete income and expense records.
+* Fields: date, kind (income/expense), category, description, amount, owner (person 1 / person 2 / shared), account or card.
+* Filter by month and by person.
 
-### 4.3 ผ่อนชำระ (Installments)
+### 4.3 Installments
 
-* ติดตามรายการผ่อนสินค้า: ชื่อรายการ, หมวดหมู่, วันเริ่มผ่อน, จำนวนงวดทั้งหมด, ค่างวด/เดือน, งวดที่จ่ายแล้ว, บัญชีที่ผูก, อัตราดอกเบี้ย/หมายเหตุ, เจ้าของ
-* Progress bar ต่องวด + ปุ่ม "จ่ายงวดนี้แล้ว" อัปเดตแบบกดครั้งเดียว
-* เตือนอัตโนมัติเมื่อรายการมีดอกเบี้ยสูง (≥5%)
+* Track installment plans: name, category, start date, total periods, amount per period, periods already paid, linked account/card, interest rate / note, owner.
+* Per-period progress bar plus a one-tap "paid this period" button.
+* Automatic warning for high-interest plans (≥5%).
 
-### 4.4 บัญชี (Accounts) — แยก 2 ส่วน
+### 4.4 Accounts — two sections
 
-* บัญชี/เงินสด: ชื่อ, ประเภท (ธนาคาร/เงินสด/e-Wallet), เจ้าของ, ยอดเงินคงเหลือปัจจุบัน (กรอกเอง)
-* บัตรเครดิต: ชื่อบัตร, วงเงิน, ยอดใช้รอบนี้ (กรอกเอง, ไม่รวมงวดผ่อน), วันสรุปยอด, วันครบกำหนดชำระ, ดอกเบี้ย %/ปี, เจ้าของ
-* ระบบคำนวณ "ใช้ไปแล้ว/เหลือ" ต่อบัตร โดยรวมยอดผ่อนคงค้างที่ผูกกับบัตรนั้นเข้าไปอัตโนมัติ
-* เมื่อเพิ่มรายการ (4.2) หรือรายการผ่อน (4.3) ให้เลือกบัญชี/บัตรจาก dropdown ที่ดึงจากรายการในแท็บนี้
+* Accounts / cash: name, type (bank / cash / e-wallet), owner, current balance.
+* Credit cards: card name, credit limit, current-cycle spend (excluding installment periods), statement day, due day, annual interest rate, owner.
+* The system computes used / remaining credit per card, automatically including the outstanding installment balance linked to that card.
+* Transaction (4.2) and installment (4.3) forms pick accounts/cards from a dropdown sourced from this tab.
 
-### 4.5 วางแผน (Plan) — 3 ส่วนย่อย
+### 4.5 Plan — three sub-sections
 
-* **ปฏิทินผ่อนล่วงหน้า**: คำนวณยอดผ่อนที่ต้องเตรียมใน 12 เดือนข้างหน้า จากรายการผ่อนที่ยังไม่หมด (คำนวณจากวันเริ่มผ่อน + งวดที่จ่ายแล้ว) แยกยอดตามบัญชี/บัตรในแต่ละเดือน เดือนที่ยอดสูงจะไฮไลต์เตือน
-* **งบประมาณรายหมวด**: ตั้งเพดานรายจ่ายต่อหมวดต่อเดือน เทียบกับยอดใช้จริงของเดือนที่เลือก (เขียว/เหลือง/แดงตามสัดส่วน)
-* **แผนปลดหนี้ (Avalanche method)**: เรียงหนี้ผ่อนคงเหลือทั้งหมดตามดอกเบี้ยสูงสุดก่อน แนะนำให้โปะรายการดอกเบี้ยแพงที่สุดก่อน
+* **Forward installment calendar**: the installment amount due over the next 12 months, derived from active plans (start date + periods paid), broken down per account/card per month, with high-total months highlighted.
+* **Category budgets**: a monthly cap per category compared against actual spend for the selected month (green / amber / red by ratio).
+* **Debt payoff plan (avalanche)**: rank all outstanding installment debt by highest interest rate first and recommend paying the most expensive one down first.
 
-### 4.6 ตั้งค่า (Settings)
+### 4.6 Settings
 
-* ตั้งชื่อทั้งสองคน (ใช้แทน "คนที่ 1 / คนที่ 2" ทั่วทั้งแอพ)
-* สรุปจำนวนข้อมูลในระบบ
-* ปุ่ม import/re-import ข้อมูลจาก Google Sheet ต้นทาง (เขียนทับ transactions, installments, accounts, cards)
+* Set both people's display names (used everywhere instead of "person 1 / person 2").
+* Record counts by type.
+* Import / re-import data from the source Google Sheet.
 
-## 5. โครงสร้างข้อมูลอ้างอิงจาก Google Sheet ต้นทาง
+## 5. Reference data structure from the source Google Sheet
 
-Sheet ต้นทางมี 8 แท็บ: `Dashboard`, `รายการเคลื่อนไหว`, `Installment`, `Credit Card`, `สรุปรายบัญชี-รายเดือน`, `บัญชี`, `หมวดหมู่`, และแท็บส่วนตัวอีกหนึ่งแท็บ
+The source sheet has 8 tabs: `Dashboard`, `Transactions`, `Installment`, `Credit Card`, `Per-account monthly summary`, `Accounts`, `Categories`, and one personal tab.
 
-ฟิลด์หลักที่ดึงมาใช้:
+Key fields used:
 
-* **รายการเคลื่อนไหว**: วันที่ทำรายการ, วันที่บันทึกรายการ, ประเภท (รายรับ/รายจ่าย), หมวดหมู่, รายการ, รายรับ, รายจ่าย, คงเหลือ, บัญชี, หมายเหตุ
-* **Installment**: รายการ, หมวดหมู่, วันที่เริ่มต้น, จำนวนงวดทั้งหมด, ค่างวด/เดือน, งวดที่ชำระแล้ว, ยอดคงเหลือ, บัญชีที่ชำระ, สถานะ, หมายเหตุ (ใช้เก็บอัตราดอกเบี้ย เช่น "ผ่อน 0.74%", "ผ่อน 9.99%")
-* **Credit Card**: ชื่อบัตร, วงเงิน, วันสรุปยอด, วันครบกำหนดชำระ, อัตราดอกเบี้ย (%/ปี), รายจ่ายรอบนี้, ยอดชำระแล้ว, ยอดค้างชำระ, วงเงินคงเหลือ, สถานะ
-* **สรุปรายบัญชี-รายเดือน**: ตารางสรุป 2 ชุด — (1) รายรับ-รายจ่ายรายบัญชีรายเดือน (2) รายบัญชีบัตรเครดิต-รายรอบบิล ซึ่งเป็นแหล่งข้อมูลสำคัญที่สุดสำหรับ "ยอดที่ต้องจ่ายต่อบัตรต่อรอบบิล" — ควรเก็บ logic การคำนวณนี้ไว้เป็นฟีเจอร์หลักในแอพใหม่ (ตรงกับ 4.5)
+* **Transactions**: transaction date, entry date, kind (income/expense), category, description, income amount, expense amount, running balance, account, note.
+* **Installment**: name, category, start date, total periods, amount per period, periods paid, outstanding balance, paying account, status, note (holds the interest rate, e.g. "installment 0.74%", "installment 9.99%").
+* **Credit Card**: card name, credit limit, statement day, due day, annual interest rate, current-cycle spend, amount paid, amount outstanding, remaining credit, status.
+* **Per-account monthly summary**: two summary tables — (1) income/expense per account per month, and (2) per credit card per billing cycle. The second is the single most valuable output of the sheet ("what is due on each card in each billing cycle") and must remain a first-class feature of the new app (matching §4.5).
 
-หมวดหมู่รายจ่ายที่ใช้จริง: ผ่อนสินค้า, ประกัน, อาหาร, ค่าเดินทาง, ช้อปปิ้ง, ค่าโทรศัพท์/Internet, ความบันเทิง, สุขภาพ, การศึกษา, ค่าที่พัก, ท่องเที่ยว, อื่นๆ
+Expense categories in real use: installments, insurance, food, transport, shopping, phone/internet, entertainment, health, education, housing, travel, other.
 
-หมวดหมู่รายรับ: เงินเดือน, รายได้เสริม, โบนัส, อื่นๆ
+Income categories: salary, side income, bonus, other.
 
-## 6. ต้นแบบปัจจุบัน (Prototype)
+## 6. Current prototype
 
-ทำเป็น React artifact ทดลองใช้งานในแชท Claude ก่อน:
+Built as a React artifact for in-chat testing:
 
-* Data model เก็บเป็น JSON ก้อนเดียว (`people`, `transactions`, `installments`, `cards`, `accounts`, `budgets`) ผ่าน Claude Artifact persistent storage (`window.storage`, shared mode)
-* นำเข้าข้อมูลจริงจาก Google Sheet มาเป็นชุดตั้งต้นแล้ว (ประวัติรายการ ~600+ รายการ, รายการผ่อน 25 รายการ, บัตร 6 ใบ)
-* ข้อจำกัดสำคัญของต้นแบบนี้: ไม่มี authentication จริง (ใครมีลิงก์เห็นข้อมูลหมด), ใช้งาน offline ไม่ได้ (ต้องเปิดผ่านลิงก์ Claude ตลอด), ไม่มี native app icon/PWA
+* The data model is a single JSON blob (`people`, `transactions`, `installments`, `cards`, `accounts`, `budgets`) in Claude Artifact persistent storage (`window.storage`, shared mode).
+* Real data has been imported from the Google Sheet as the seed set (600+ transactions, 25 installment plans, 6 cards).
+* Key limitations: no real authentication (anyone with the link sees everything), no offline use (requires the Claude link), no app icon / PWA.
 
-## 7. สิ่งที่ต้องตัดสินใจ/ออกแบบเพิ่มตอนสร้างใน Claude Code
+## 7. Decisions to make when rebuilding in Claude Code
 
-* **Authentication**: ระบบ login แยกคนสำหรับ 2 คน (เช่น อีเมล/รหัสผ่าน หรือ magic link) แทน shared-link แบบไม่มี auth
-* **Database**: เลือก backend (เช่น Supabase/Postgres) แทน key-value storage แบบ artifact
-* **Offline / PWA**: ทำให้ใช้งานแบบ installable app บนมือถือได้ พร้อม cache ข้อมูลไว้ใช้ offline บางส่วน
-* **Hosting**: เลือกที่ deploy (เช่น Vercel) + ตั้งค่า custom domain (ถ้าต้องการ)
-* **การซิงก์ข้อมูล real-time ระหว่าง 2 คน**: ถ้าทั้งคู่เปิดพร้อมกัน ควรเห็นการอัปเดตของกันและกันแบบ real-time หรือ refresh ตามรอบ
-* **ฟีเจอร์ที่ยังไม่ได้ทำแต่อยู่ในเป้าหมายเดิม**: วางแผนลงทุน และ วางแผนเกษียณ (ดูหัวข้อ 1 ข้อ 4) — ยังไม่ได้ออกแบบรายละเอียด รอคุยเพิ่มตอนถึงเฟสนั้น
+* **Authentication**: per-person login (email/password or magic link) instead of an unauthenticated shared link.
+* **Database**: a real backend (e.g. Supabase/Postgres) instead of artifact key-value storage.
+* **Offline / PWA**: installable on mobile with partial offline data.
+* **Hosting**: where to deploy (e.g. Vercel) plus an optional custom domain.
+* **Real-time sync between the two people**: live updates when both have the app open, or periodic refresh.
+* **Recurring transactions**: recurring income and expenses (salary, insurance premiums, phone bills, subscriptions) should not be re-entered by hand every month — see DESIGN §4.4 and §6.6.
+* **Not yet designed**: investment planning and retirement planning (§1 item 4) — to be specified when that phase is reached.
 
 ## 8. Repo
 

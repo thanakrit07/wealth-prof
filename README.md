@@ -1,12 +1,14 @@
 # Wealth Prof
 
-แอพจัดการการเงินส่วนตัวสำหรับคู่รัก 2 คนใช้ร่วมกัน — ติดตามรายรับ-รายจ่ายแยกรายคน, ติดตามภาระผ่อน/รอบบิลบัตรเครดิต, และวางแผนปลดหนี้
+A shared personal-finance app for a couple — track income and expenses per person, follow installment plans and credit-card billing cycles, and plan debt payoff.
 
-## เอกสาร
+## Documents
 
-* [docs/SPEC.md](docs/SPEC.md) — สเปกเบื้องต้นจากบทสนทนาต้นทาง (baseline features + โครงสร้างข้อมูลจาก Google Sheet เดิม)
-* [docs/DESIGN.md](docs/DESIGN.md) — เอกสารวิเคราะห์และออกแบบระบบ: tech stack, data model, logic การเงินหลัก, UX, roadmap
+* [docs/SPEC.md](docs/SPEC.md) — product spec from the original conversation (baseline features and the data structure of the existing Google Sheet)
+* [docs/DESIGN.md](docs/DESIGN.md) — system analysis and design: tech stack, data model, core financial logic, UX, roadmap
 
-## สถานะ
+Documentation is in English; the product UI is in Thai.
 
-อยู่ระหว่างขั้นออกแบบ — ยังไม่เริ่ม implement (ดู roadmap ใน DESIGN.md หัวข้อ 10)
+## Status
+
+Design stage — implementation has not started (see the roadmap in DESIGN §10).
