@@ -3,6 +3,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import type { Tab } from '@/components/layout/AppShell'
 import { AuthScreen } from './components/AuthScreen'
 import { HouseholdSetup } from './components/HouseholdSetup'
+import { ResetPasswordScreen } from './components/ResetPasswordScreen'
 import { HomeScreen } from '@/features/home/HomeScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
@@ -47,7 +48,7 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
 }
 
 function App() {
-  const { session, loading: sessionLoading } = useSession()
+  const { session, loading: sessionLoading, passwordRecovery, clearPasswordRecovery } = useSession()
   const [member, setMember] = useState<HouseholdMember | null>(null)
   const [memberLoading, setMemberLoading] = useState(true)
 
@@ -77,6 +78,10 @@ function App() {
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     )
+  }
+
+  if (passwordRecovery) {
+    return <ResetPasswordScreen onDone={clearPasswordRecovery} />
   }
 
   if (!session) {
