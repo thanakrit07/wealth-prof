@@ -78,9 +78,15 @@ export function useTransactions(householdId: string, range: { start: string; end
 export function useCreateTransaction(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    // Returns the new row's id so the caller can offer undo (soft delete).
     mutationFn: async (input: TransactionInput) => {
-      const { error } = await supabase.from('transactions').insert(toRow(householdId, input))
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert(toRow(householdId, input))
+        .select('id')
+        .single()
       if (error) throw error
+      return data.id as string
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions', householdId] }),
   })
