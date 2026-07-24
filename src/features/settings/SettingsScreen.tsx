@@ -2,12 +2,14 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CategoriesScreen } from '@/features/categories/CategoriesScreen'
+import { ChangePasswordDialog } from '@/features/settings/ChangePasswordDialog'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { supabase } from '@/lib/supabase'
 
 export function SettingsScreen() {
   const { self, members } = useHousehold()
   const [categoriesOpen, setCategoriesOpen] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
 
   return (
     <div className="space-y-6 p-4">
@@ -31,6 +33,13 @@ export function SettingsScreen() {
         </Button>
       </section>
 
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-muted-foreground">Account</h2>
+        <Button variant="outline" onClick={() => setPasswordOpen(true)}>
+          Change password
+        </Button>
+      </section>
+
       <Button variant="outline" onClick={() => supabase.auth.signOut()}>
         Sign out
       </Button>
@@ -43,6 +52,8 @@ export function SettingsScreen() {
           <CategoriesScreen />
         </DialogContent>
       </Dialog>
+
+      <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
     </div>
   )
 }
