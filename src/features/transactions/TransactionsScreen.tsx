@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ArrowRightLeft } from 'lucide-react'
+import { ArrowRightLeft, X } from 'lucide-react'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { useCategories } from '@/lib/categories'
 import { useAccounts } from '@/lib/accounts'
@@ -14,9 +14,11 @@ import { TransactionSheet } from './TransactionSheet'
 interface Props {
   month: string
   person: PersonFilter
+  categoryId?: string | null
+  onClearCategory?: () => void
 }
 
-export function TransactionsScreen({ month, person }: Props) {
+export function TransactionsScreen({ month, person, categoryId, onClearCategory }: Props) {
   const { householdId, members } = useHousehold()
   const range = useMemo(() => monthRange(month), [month])
   const { data: transactions } = useTransactions(householdId, range)
@@ -34,7 +36,10 @@ export function TransactionsScreen({ month, person }: Props) {
   }, [accounts, cards])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
 
-  const filtered = (transactions ?? []).filter((t) => matchesPersonFilter(t.owner_id, person))
+  const filtered = (transactions ?? []).filter(
+    (t) => matchesPersonFilter(t.owner_id, person) && (!categoryId || t.category_id === categoryId),
+  )
+  const filterCategory = categoryId ? categoryById.get(categoryId) : null
   const groups = useMemo(() => {
     const map = new Map<string, Transaction[]>()
     for (const t of filtered) {
@@ -55,6 +60,16 @@ export function TransactionsScreen({ month, person }: Props) {
 
   return (
     <div className="p-4">
+      {filterCategory && (
+        <button
+          onClick={onClearCategory}
+          className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+        >
+          <CategoryIcon icon={filterCategory.icon} className="size-3.5" />
+          {filterCategory.name}
+          <X className="size-3" aria-label="Clear category filter" />
+        </button>
+      )}
       {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this month.</p>}
       <div className="space-y-4">
         {groups.map(([date, items]) => (

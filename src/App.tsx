@@ -20,11 +20,28 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
   const [month, setMonth] = useUrlState('month', currentMonthKey())
   const [person, setPerson] = useUrlState('person', 'all')
   const [tab, setTab] = useUrlState('tab', 'home')
+  const [category, setCategory] = useUrlState('cat', '')
   const [quickAddOpen, setQuickAddOpen] = useState(false)
 
   const screens: Record<Tab, React.ReactNode> = {
-    home: <HomeScreen month={month} person={person as PersonFilter} />,
-    transactions: <TransactionsScreen month={month} person={person as PersonFilter} />,
+    home: (
+      <HomeScreen
+        month={month}
+        person={person as PersonFilter}
+        onCategorySelect={(id) => {
+          setCategory(id)
+          setTab('transactions')
+        }}
+      />
+    ),
+    transactions: (
+      <TransactionsScreen
+        month={month}
+        person={person as PersonFilter}
+        categoryId={category || null}
+        onClearCategory={() => setCategory('')}
+      />
+    ),
     accounts: <AccountsScreen />,
     settings: <SettingsScreen />,
   }
