@@ -18,15 +18,23 @@ export function AuthScreen() {
     setError(null)
     setNotice(null)
 
-    const { error } =
-      mode === 'sign-in'
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password })
-
-    if (error) {
-      setError(error.message)
-    } else if (mode === 'sign-up') {
-      setNotice('Check your email to confirm your account, then sign in.')
+    if (mode === 'sign-in') {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) setError(error.message)
+    } else {
+      const { data, error } = await supabase.auth.signUp({ email, password })
+      if (error) {
+        setError(error.message)
+      } else if (data.user && data.user.identities && data.user.identities.length === 0) {
+        // Supabase signUp() never reveals whether an email is already registered
+        // (anti-enumeration): a genuinely new signup gets a non-empty
+        // `identities` array, an existing-and-confirmed email gets an empty
+        // one with no error and no new email sent. Without this check the
+        // user is told to "check your email" for a mail that never arrives.
+        setError('This email already has an account — use "Sign in" instead.')
+      } else {
+        setNotice('Check your email to confirm your account, then sign in.')
+      }
     }
     setSubmitting(false)
   }
