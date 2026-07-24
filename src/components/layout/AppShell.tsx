@@ -37,12 +37,12 @@ export function AppShell({ month, onMonthChange, person, onPersonChange, tab, on
 
   return (
     <div className="flex min-h-svh flex-col bg-background">
-      <header className="sticky top-0 z-10 space-y-2 border-b bg-background/95 px-4 py-3 backdrop-blur">
+      <header className="sticky top-0 z-10 space-y-2 border-b bg-linear-to-r from-secondary/70 via-background/95 to-accent/60 px-4 py-3 backdrop-blur">
         <div className="flex items-center justify-between">
           <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Previous month">
             <ChevronLeft className="size-4" />
           </Button>
-          <span className="text-sm font-medium">{monthLabel(month)}</span>
+          <span className="font-heading text-sm font-medium">{monthLabel(month)}</span>
           <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, 1))} aria-label="Next month">
             <ChevronRight className="size-4" />
           </Button>
@@ -70,13 +70,13 @@ export function AppShell({ month, onMonthChange, person, onPersonChange, tab, on
       <Button
         onClick={onQuickAdd}
         size="icon"
-        className="fixed bottom-20 right-4 z-20 size-14 rounded-full shadow-lg"
+        className="gradient-love fixed bottom-20 right-4 z-20 size-14 rounded-full border-0 text-white shadow-lg shadow-primary/30"
         aria-label="Quick add"
       >
         <Plus className="size-6" />
       </Button>
 
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t bg-background">
+      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t bg-background/95 backdrop-blur">
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}

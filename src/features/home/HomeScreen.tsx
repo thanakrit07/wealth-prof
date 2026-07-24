@@ -21,8 +21,8 @@ export function HomeScreen({ month, person }: Props) {
 
   return (
     <div className="space-y-3 p-4">
-      <div className="rounded-xl border p-4">
-        <h2 className="text-sm font-medium text-muted-foreground">This month</h2>
+      <div className="rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 p-4 shadow-sm">
+        <h2 className="font-heading text-sm font-medium text-muted-foreground">This month</h2>
         <dl className="mt-2 grid grid-cols-3 gap-2 text-center">
           <div>
             <dt className="text-xs text-muted-foreground">Income</dt>
@@ -34,7 +34,7 @@ export function HomeScreen({ month, person }: Props) {
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Net</dt>
-            <dd className={income - expense >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
+            <dd className={income - expense >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
               {formatBaht(income - expense)}
             </dd>
           </div>
