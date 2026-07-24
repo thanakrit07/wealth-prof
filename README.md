@@ -11,4 +11,15 @@ Documentation is in English; the product UI is in Thai.
 
 ## Status
 
-Design stage — implementation has not started (see the roadmap in DESIGN §10).
+Phase 0 (Foundation) in progress — see the roadmap in DESIGN §10.
+
+## Development
+
+```bash
+npm install
+npm run dev       # start the Vite dev server
+npm run typecheck # tsc --noEmit
+npm test          # vitest
+```
+
+Supabase schema and migrations live in `supabase/migrations/`.
