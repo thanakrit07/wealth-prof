@@ -95,8 +95,42 @@ export function useCreateTransaction(householdId: string) {
 export function useUpdateTransaction(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, input }: { id: string; input: TransactionInput }) => {
-      const { error } = await supabase.from('transactions').update(toRow(householdId, input)).eq('id', id)
+    // `confirm: true` additionally marks a generated (unconfirmed) row as
+    // reviewed — editing an amount in the review strip confirms it (§6.6).
+    mutationFn: async ({ id, input, confirm }: { id: string; input: TransactionInput; confirm?: boolean }) => {
+      const row = { ...toRow(householdId, input), ...(confirm ? { confirmed: true } : {}) }
+      const { error } = await supabase.from('transactions').update(row).eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions', householdId] }),
+  })
+}
+
+// Generated rows awaiting review (§6.6) — not limited to the visible
+// month, so a missed review from last month still surfaces.
+export function useUnconfirmedTransactions(householdId: string) {
+  return useQuery({
+    queryKey: ['transactions', householdId, 'unconfirmed'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('v_transactions')
+        .select(
+          'id, household_id, date, kind, category_id, category_kind, description, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, confirmed',
+        )
+        .eq('household_id', householdId)
+        .eq('confirmed', false)
+        .order('date')
+      if (error) throw error
+      return data as Transaction[]
+    },
+  })
+}
+
+export function useConfirmTransaction(householdId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('transactions').update({ confirmed: true }).eq('id', id)
       if (error) throw error
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions', householdId] }),

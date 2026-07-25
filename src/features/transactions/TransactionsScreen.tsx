@@ -9,6 +9,7 @@ import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
 import { monthRange } from '@/lib/month'
 import { useTransactions, type Transaction } from '@/lib/transactions'
+import { ReviewStrip } from './ReviewStrip'
 import { TransactionSheet } from './TransactionSheet'
 
 interface Props {
@@ -60,6 +61,7 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
 
   return (
     <div className="p-4">
+      <ReviewStrip onEdit={setEditing} />
       {filterCategory && (
         <button
           onClick={onClearCategory}
@@ -91,10 +93,17 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
                         <CategoryIcon icon={category?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
                       )}
                       <div className="min-w-0 flex-1">
-                        <p className="truncate">
-                          {t.kind === 'transfer'
-                            ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
-                            : t.description || category?.name || t.kind}
+                        <p className="flex items-center gap-1.5 truncate">
+                          <span className="truncate">
+                            {t.kind === 'transfer'
+                              ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
+                              : t.description || category?.name || t.kind}
+                          </span>
+                          {!t.confirmed && (
+                            <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                              Pending
+                            </span>
+                          )}
                         </p>
                         <p className="truncate text-xs text-muted-foreground">
                           {instrumentLabel(t, 'from')}

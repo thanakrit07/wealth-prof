@@ -139,7 +139,8 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
       note: note || null,
     }
     if (transaction) {
-      await update.mutateAsync({ id: transaction.id, input })
+      // Saving an unconfirmed (generated) row counts as reviewing it.
+      await update.mutateAsync({ id: transaction.id, input, confirm: !transaction.confirmed })
       onOpenChange(false)
       return
     }

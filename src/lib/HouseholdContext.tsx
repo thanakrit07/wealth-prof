@@ -22,15 +22,26 @@ export function HouseholdProvider({
   const { data: members } = useQuery({
     queryKey: ['household_members', self.household_id],
     queryFn: async () => {
+      // Excludes pending invites (user_id is null until accepted) — this
+      // list drives person filter chips and owner pickers, which only make
+      // sense for people who've actually joined. See usePendingInvites for
+      // the Settings-only invite management view.
       const { data, error } = await supabase
         .from('household_members')
         .select('id, household_id, user_id, display_name, color')
         .eq('household_id', self.household_id)
+        .not('user_id', 'is', null)
         .order('created_at')
       if (error) throw error
       return data as HouseholdMember[]
     },
+    // initialData shows something instantly (no flicker on first render),
+    // but initialDataUpdatedAt: 0 marks it stale immediately — otherwise
+    // the global 30s staleTime (queryClient.ts) treats this seed value as
+    // fresh and suppresses the real fetch, so a second member (e.g. a
+    // partner who just accepted an invite) wouldn't appear for up to 30s.
     initialData: [self],
+    initialDataUpdatedAt: 0,
   })
 
   return (

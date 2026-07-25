@@ -1,17 +1,18 @@
 import type { ComponentType, ReactNode } from 'react'
-import { ChevronLeft, ChevronRight, Home, Plus, Receipt, Settings as SettingsIcon, Wallet } from 'lucide-react'
+import { CalendarClock, ChevronLeft, ChevronRight, Home, Plus, Receipt, Settings as SettingsIcon, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { monthLabel, shiftMonth } from '@/lib/month'
 import type { PersonFilter } from '@/lib/filters'
 
-export type Tab = 'home' | 'transactions' | 'accounts' | 'settings'
+export type Tab = 'home' | 'transactions' | 'accounts' | 'plan' | 'settings'
 
 const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: 'home', label: 'Home', icon: Home },
   { key: 'transactions', label: 'Transactions', icon: Receipt },
   { key: 'accounts', label: 'Accounts', icon: Wallet },
+  { key: 'plan', label: 'Plan', icon: CalendarClock },
   { key: 'settings', label: 'Settings', icon: SettingsIcon },
 ]
 

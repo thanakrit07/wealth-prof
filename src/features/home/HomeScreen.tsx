@@ -6,6 +6,7 @@ import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
 import { monthRange } from '@/lib/month'
 import { useTransactions } from '@/lib/transactions'
+import { SetAsideCard } from './SetAsideCard'
 
 interface Props {
   month: string
@@ -19,7 +20,9 @@ export function HomeScreen({ month, person, onCategorySelect }: Props) {
   const { data: transactions } = useTransactions(householdId, range)
   const { data: categories } = useCategories(householdId)
 
-  const filtered = (transactions ?? []).filter((t) => matchesPersonFilter(t.owner_id, person))
+  // Unconfirmed (generated, unreviewed) rows are excluded from every total (§6.6).
+  const confirmed = useMemo(() => (transactions ?? []).filter((t) => t.confirmed), [transactions])
+  const filtered = confirmed.filter((t) => matchesPersonFilter(t.owner_id, person))
   const income = filtered.filter((t) => t.kind === 'income').reduce((sum, t) => sum + t.amount, 0)
   const expense = filtered.filter((t) => t.kind === 'expense').reduce((sum, t) => sum + t.amount, 0)
 
@@ -43,7 +46,7 @@ export function HomeScreen({ month, person, onCategorySelect }: Props) {
   // (and only shows) when the person filter is "All".
   const personRows = useMemo(() => {
     if (person !== 'all') return []
-    const all = transactions ?? []
+    const all = confirmed
     const rows = [
       ...members.map((m) => ({ key: m.id, label: m.display_name, color: m.color, ownerId: m.id as string | null })),
       { key: 'shared', label: 'Shared', color: '#a78bfa', ownerId: null as string | null },
@@ -58,7 +61,7 @@ export function HomeScreen({ month, person, onCategorySelect }: Props) {
         }
       })
       .filter((row) => row.income > 0 || row.expense > 0)
-  }, [transactions, members, person])
+  }, [confirmed, members, person])
 
   return (
     <div className="space-y-4 p-4">
@@ -81,6 +84,8 @@ export function HomeScreen({ month, person, onCategorySelect }: Props) {
           </div>
         </dl>
       </div>
+
+      <SetAsideCard />
 
       {personRows.length > 0 && (
         <section className="space-y-2">

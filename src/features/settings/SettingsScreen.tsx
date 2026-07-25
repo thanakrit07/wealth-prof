@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CategoriesScreen } from '@/features/categories/CategoriesScreen'
 import { ChangePasswordDialog } from '@/features/settings/ChangePasswordDialog'
+import { InviteSection } from '@/features/settings/InviteSection'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { supabase } from '@/lib/supabase'
 
@@ -25,6 +26,8 @@ export function SettingsScreen() {
           ))}
         </ul>
       </section>
+
+      <InviteSection />
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">Data</h2>

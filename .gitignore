@@ -25,3 +25,6 @@ dist-ssr
 .vercel
 .env*
 .playwright-mcp
+
+# Raw sheet exports for scripts/import-sheet.ts — real financial data, never committed
+/import-data

@@ -12,6 +12,7 @@ import { useAccounts, useCreateAccount, useUpdateAccount, type Account, type Acc
 import { useCards, useCreateCard, useUpdateCard, type Card } from '@/lib/cards'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { formatBaht } from '@/lib/format'
+import { CardCycleDialog } from './CardCycleDialog'
 
 export function AccountsScreen() {
   const { householdId } = useHousehold()
@@ -19,6 +20,7 @@ export function AccountsScreen() {
   const { data: cards } = useCards(householdId)
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
+  const [viewingCycleCard, setViewingCycleCard] = useState<Card | null>(null)
 
   return (
     <div className="space-y-6 p-4">
@@ -60,7 +62,12 @@ export function AccountsScreen() {
         <ul className="space-y-1">
           {(cards ?? []).map((card) => (
             <li key={card.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-              <span className={card.archived ? 'flex-1 text-muted-foreground line-through' : 'flex-1'}>{card.name}</span>
+              <button
+                onClick={() => !card.archived && setViewingCycleCard(card)}
+                className={card.archived ? 'flex-1 text-left text-muted-foreground line-through' : 'flex-1 text-left'}
+              >
+                {card.name}
+              </button>
               <span className="text-muted-foreground">{formatBaht(card.credit_limit)} limit</span>
               <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingCard(card)} aria-label="Edit">
                 <Pencil className="size-3.5" />
@@ -85,6 +92,7 @@ export function AccountsScreen() {
           onClose={() => setEditingCard(null)}
         />
       )}
+      {viewingCycleCard && <CardCycleDialog card={viewingCycleCard} onClose={() => setViewingCycleCard(null)} />}
     </div>
   )
 }

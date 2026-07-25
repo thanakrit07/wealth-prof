@@ -8,6 +8,8 @@ import { HomeScreen } from '@/features/home/HomeScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
 import { AccountsScreen } from '@/features/accounts/AccountsScreen'
+import { PlanScreen } from '@/features/plan/PlanScreen'
+import { RecurringMaterialiser } from '@/features/plan/RecurringMaterialiser'
 import { SettingsScreen } from '@/features/settings/SettingsScreen'
 import { fetchOwnMember, type HouseholdMember } from './lib/household'
 import { HouseholdProvider } from './lib/HouseholdContext'
@@ -43,11 +45,13 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
       />
     ),
     accounts: <AccountsScreen />,
+    plan: <PlanScreen />,
     settings: <SettingsScreen />,
   }
 
   return (
     <HouseholdProvider self={self}>
+      <RecurringMaterialiser />
       <AppShell
         month={month}
         onMonthChange={setMonth}
@@ -106,7 +110,8 @@ function App() {
   }
 
   if (!member) {
-    return <HouseholdSetup onCreated={setMember} />
+    const inviteCode = new URLSearchParams(window.location.search).get('invite')
+    return <HouseholdSetup onCreated={setMember} inviteCode={inviteCode} />
   }
 
   return <SignedInApp self={member} />
