@@ -4,10 +4,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
+import { AmountField } from '@/components/AmountField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
+import { Keypad } from '@/components/Keypad'
 import { OwnerSelect } from '@/components/OwnerSelect'
+import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
 import { useHousehold } from '@/lib/HouseholdContext'
 import {
@@ -38,8 +41,11 @@ export function InstallmentSheet({ installment, onClose }: Props) {
   const [categoryId, setCategoryId] = useState<string | null>(installment?.category_id ?? null)
   const [startDate, setStartDate] = useState(installment?.start_date ?? today())
   const [totalPeriods, setTotalPeriods] = useState(String(installment?.total_periods ?? 12))
-  const [monthlyAmount, setMonthlyAmount] = useState(installment ? String(installment.monthly_amount) : '')
-  const [finalAmount, setFinalAmount] = useState(installment?.final_amount != null ? String(installment.final_amount) : '')
+  const monthlyAmount = useAmountEntry(installment ? String(installment.monthly_amount) : '')
+  const finalAmount = useAmountEntry(installment?.final_amount != null ? String(installment.final_amount) : '')
+  // Which of the two amount fields the sticky-footer Keypad is bound to
+  // (DESIGN.md §7.2 D9) — only one keypad, shared between them.
+  const [activeAmount, setActiveAmount] = useState<'monthly' | 'final' | null>(null)
   const [instrument, setInstrument] = useState<Instrument>({
     accountId: installment?.account_id ?? null,
     cardId: installment?.card_id ?? null,
@@ -54,7 +60,7 @@ export function InstallmentSheet({ installment, onClose }: Props) {
   const canSave =
     name.trim().length > 0 &&
     Number(totalPeriods) > 0 &&
-    Number(monthlyAmount) > 0 &&
+    monthlyAmount.value > 0 &&
     Boolean(instrument.accountId || instrument.cardId)
 
   async function handleSave() {
@@ -63,8 +69,8 @@ export function InstallmentSheet({ installment, onClose }: Props) {
       category_id: categoryId,
       start_date: startDate,
       total_periods: Number(totalPeriods),
-      monthly_amount: Number(monthlyAmount),
-      final_amount: finalAmount ? Number(finalAmount) : null,
+      monthly_amount: monthlyAmount.value,
+      final_amount: finalAmount.expr ? finalAmount.value : null,
       card_id: instrument.cardId,
       account_id: instrument.accountId,
       annual_interest_rate: Number(interestRate),
@@ -124,14 +130,18 @@ export function InstallmentSheet({ installment, onClose }: Props) {
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="inst-amount">Amount per period</Label>
-              <Input id="inst-amount" type="number" inputMode="decimal" value={monthlyAmount} onChange={(e) => setMonthlyAmount(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="inst-final">Final period (optional)</Label>
-              <Input id="inst-final" type="number" inputMode="decimal" value={finalAmount} onChange={(e) => setFinalAmount(e.target.value)} />
-            </div>
+            <AmountField
+              label="Amount per period"
+              expr={monthlyAmount.expr}
+              active={activeAmount === 'monthly'}
+              onActivate={() => setActiveAmount('monthly')}
+            />
+            <AmountField
+              label="Final period (optional)"
+              expr={finalAmount.expr}
+              active={activeAmount === 'final'}
+              onActivate={() => setActiveAmount('final')}
+            />
           </div>
 
           <div className="space-y-1.5">
@@ -162,18 +172,28 @@ export function InstallmentSheet({ installment, onClose }: Props) {
             <Label htmlFor="inst-note">Note (optional)</Label>
             <Input id="inst-note" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
-
-          <div className="flex gap-2">
-            {installment && (
-              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete installment">
-                <Trash2 className="size-4" />
-              </Button>
-            )}
-            <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
-              Save
-            </Button>
-          </div>
         </div>
+
+        <DrawerFooter>
+          {activeAmount ? (
+            <Keypad
+              onKey={activeAmount === 'monthly' ? monthlyAmount.press : finalAmount.press}
+              onEquals={activeAmount === 'monthly' ? monthlyAmount.pressEquals : finalAmount.pressEquals}
+              onDone={() => setActiveAmount(null)}
+            />
+          ) : (
+            <div className="flex gap-2">
+              {installment && (
+                <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete installment">
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+              <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
+                Save
+              </Button>
+            </div>
+          )}
+        </DrawerFooter>
       </DrawerContent>
     </Drawer>
   )

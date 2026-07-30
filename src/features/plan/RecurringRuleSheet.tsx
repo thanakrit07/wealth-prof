@@ -4,11 +4,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { AmountField } from '@/components/AmountField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
+import { Keypad } from '@/components/Keypad'
 import { OwnerSelect } from '@/components/OwnerSelect'
+import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
 import { useHousehold } from '@/lib/HouseholdContext'
 import type { MonthEndRule, RecurrenceFreq } from '@/lib/finance/recurrence'
@@ -45,7 +48,8 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
 
   const [name, setName] = useState(rule?.name ?? '')
   const [kind, setKind] = useState<TransactionKind>(rule?.kind ?? 'expense')
-  const [amount, setAmount] = useState(rule ? String(rule.amount) : '')
+  const amount = useAmountEntry(rule ? String(rule.amount) : '')
+  const [keypadOpen, setKeypadOpen] = useState(false)
   const [categoryId, setCategoryId] = useState<string | null>(rule?.category_id ?? null)
   const [from, setFrom] = useState<Instrument>({
     accountId: rule?.from_account_id ?? null,
@@ -72,7 +76,7 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
 
   const canSave =
     name.trim().length > 0 &&
-    Number(amount) > 0 &&
+    amount.value > 0 &&
     Number(interval) > 0 &&
     Boolean(from.accountId || from.cardId) &&
     (kind === 'transfer' ? Boolean(to.accountId || to.cardId) : Boolean(categoryId)) &&
@@ -90,7 +94,7 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
       kind,
       category_id: kind === 'transfer' ? null : categoryId,
       category_kind: kind === 'transfer' ? null : (kind as 'income' | 'expense'),
-      amount: Number(amount),
+      amount: amount.value,
       owner_id: ownerId,
       from_account_id: from.accountId,
       from_card_id: from.cardId,
@@ -145,10 +149,7 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
             </TabsList>
           </Tabs>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="rule-amount">Amount</Label>
-            <Input id="rule-amount" type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
-          </div>
+          <AmountField label="Amount" expr={amount.expr} active={keypadOpen} onActivate={() => setKeypadOpen(true)} />
 
           {kind !== 'transfer' && (
             <div className="space-y-1.5">
@@ -287,17 +288,24 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
             </p>
           )}
 
-          <div className="flex gap-2">
-            {rule && (
-              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete rule">
-                <Trash2 className="size-4" />
-              </Button>
-            )}
-            <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
-              Save
-            </Button>
-          </div>
         </div>
+
+        <DrawerFooter>
+          {keypadOpen ? (
+            <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={() => setKeypadOpen(false)} />
+          ) : (
+            <div className="flex gap-2">
+              {rule && (
+                <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete rule">
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+              <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
+                Save
+              </Button>
+            </div>
+          )}
+        </DrawerFooter>
       </DrawerContent>
     </Drawer>
   )
