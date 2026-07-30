@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { OwnerSelect } from '@/components/OwnerSelect'
@@ -165,11 +165,11 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="max-h-[90vh] overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>{transaction ? 'Edit transaction' : 'Add transaction'}</SheetTitle>
-        </SheetHeader>
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent>
+        <DrawerHeader>
+          <DrawerTitle>{transaction ? 'Edit transaction' : 'Add transaction'}</DrawerTitle>
+        </DrawerHeader>
 
         <div className="space-y-4 px-4 pb-4">
           <Input
@@ -302,7 +302,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
             </Button>
           </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DrawerContent>
+    </Drawer>
   )
 }

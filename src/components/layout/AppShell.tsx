@@ -1,7 +1,8 @@
 import type { ComponentType, ReactNode } from 'react'
-import { CalendarClock, ChevronLeft, ChevronRight, Home, Plus, Receipt, Settings as SettingsIcon, Wallet } from 'lucide-react'
+import { CalendarClock, ChevronLeft, ChevronRight, CloudOff, Home, Plus, Receipt, Settings as SettingsIcon, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useOnline } from '@/hooks/useOnline'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { monthLabel, shiftMonth } from '@/lib/month'
 import type { PersonFilter } from '@/lib/filters'
@@ -29,6 +30,7 @@ interface Props {
 
 export function AppShell({ month, onMonthChange, person, onPersonChange, tab, onTabChange, onQuickAdd, children }: Props) {
   const { members } = useHousehold()
+  const online = useOnline()
 
   const personOptions: { value: PersonFilter; label: string }[] = [
     { value: 'all', label: 'All' },
@@ -38,7 +40,13 @@ export function AppShell({ month, onMonthChange, person, onPersonChange, tab, on
 
   return (
     <div className="flex min-h-svh flex-col bg-background">
-      <header className="sticky top-0 z-10 space-y-2 border-b bg-linear-to-r from-secondary/70 via-background/95 to-accent/60 px-4 py-3 backdrop-blur">
+      <header className="sticky top-0 z-10 space-y-2 border-b bg-linear-to-r from-secondary/70 via-background/95 to-accent/60 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] backdrop-blur">
+        {!online && (
+          <div className="flex items-center justify-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+            <CloudOff className="size-3.5" />
+            ออฟไลน์อยู่ — แสดงข้อมูลล่าสุดที่บันทึกไว้
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Previous month">
             <ChevronLeft className="size-4" />
@@ -66,24 +74,24 @@ export function AppShell({ month, onMonthChange, person, onPersonChange, tab, on
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto pb-24">{children}</main>
+      <main className="flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+6rem)]">{children}</main>
 
       <Button
         onClick={onQuickAdd}
         size="icon"
-        className="gradient-love fixed bottom-20 right-4 z-20 size-14 rounded-full border-0 text-white shadow-lg shadow-primary/30"
+        className="gradient-love fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-4 z-20 size-14 rounded-full border-0 text-white shadow-lg shadow-primary/30 transition-transform active:scale-95"
         aria-label="Quick add"
       >
         <Plus className="size-6" />
       </Button>
 
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t bg-background/95 backdrop-blur">
+      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => onTabChange(key)}
             className={cn(
-              'flex flex-1 flex-col items-center gap-1 py-2 text-xs',
+              'flex min-h-12 flex-1 flex-col items-center justify-center gap-1 py-2 text-xs transition-colors active:bg-accent/60',
               tab === key ? 'text-primary' : 'text-muted-foreground',
             )}
           >

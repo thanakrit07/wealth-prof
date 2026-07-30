@@ -149,3 +149,21 @@
     @apply font-heading;
     }
 }
+
+/* Mobile / PWA polish: behave like a native app when installed to the
+   home screen — no rubber-band bounce on the shell, no grey tap flashes,
+   no accidental text-size inflation or long-press callouts on controls. */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior-y: none;
+  }
+  body {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+  button, [role="button"], a {
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+  }
+}

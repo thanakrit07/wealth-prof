@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { OwnerSelect } from '@/components/OwnerSelect'
@@ -88,11 +88,11 @@ export function InstallmentSheet({ installment, onClose }: Props) {
   }
 
   return (
-    <Sheet open onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="bottom" className="max-h-[90vh] overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>{installment ? 'Edit installment' : 'New installment'}</SheetTitle>
-        </SheetHeader>
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent>
+        <DrawerHeader>
+          <DrawerTitle>{installment ? 'Edit installment' : 'New installment'}</DrawerTitle>
+        </DrawerHeader>
 
         <div className="space-y-4 px-4 pb-4">
           <div className="space-y-1.5">
@@ -174,7 +174,7 @@ export function InstallmentSheet({ installment, onClose }: Props) {
             </Button>
           </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DrawerContent>
+    </Drawer>
   )
 }

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
@@ -125,11 +125,11 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
   }
 
   return (
-    <Sheet open onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="bottom" className="max-h-[90vh] overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>{rule ? 'Edit recurring rule' : 'New recurring rule'}</SheetTitle>
-        </SheetHeader>
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent>
+        <DrawerHeader>
+          <DrawerTitle>{rule ? 'Edit recurring rule' : 'New recurring rule'}</DrawerTitle>
+        </DrawerHeader>
 
         <div className="space-y-4 px-4 pb-4">
           <div className="space-y-1.5">
@@ -298,7 +298,7 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
             </Button>
           </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DrawerContent>
+    </Drawer>
   )
 }
