@@ -1,8 +1,10 @@
-# Wealth Prof — System Analysis & Design (v2)
+# Wealth Prof — System Analysis & Design (v3)
 
 > Builds on [SPEC.md](./SPEC.md). Analyses the spec and proposes the architecture, data model, financial logic, UX and delivery plan for the real app in this repo.
 >
 > **v2 changes:** rewritten in English; added transfers as a first-class transaction kind (D7); added recurring transactions (D8); fixed credit-utilisation double counting, per-cycle card adjustments, soft delete, RLS coverage of child tables, interest-rate units, and the import strategy.
+>
+> **v3 changes (2026-07-31, after real phase-1 use):** transaction entry redesigned after the **Money Manager** app, which the user prefers over the v2 quick-add — a field-form sheet with pickers in a fixed bottom panel and an in-app calculator keypad (D9); two-level categories (D10); card-billed installment periods materialise as transactions automatically and every card gets a per-cycle statement view, replacing manual "mark period paid" (D11).
 
 ---
 
@@ -26,6 +28,9 @@
 | D6 | One JSON blob, no auth | Concurrent edits clobber each other; anyone with the link sees everything | Postgres + Row Level Security + per-person login (§5) |
 | **D7** | Only income and expense exist | Paying a credit-card bill, taking a cash advance and moving money between own accounts are none of those. Recording a card payment as an expense **double counts** it against the card purchases | Add `transfer` as a third transaction kind with a source and a destination, excluded from every income/expense total (§4.3) |
 | **D8** | Every recurring item re-typed monthly | Salary, insurance, phone, subscriptions are the most repetitive entries; forgetting one silently breaks the monthly summary and the cash-flow forecast | **Recurring rules** that materialise real transactions on schedule and project future ones into the forward calendar (§4.4, §6.6) |
+| **D9** *(v3)* | v2 quick-add: amount input first, system numeric keyboard, category icon grid in a scrolling drawer | On iOS the system keyboard shrinks the viewport and shoves the whole drawer up; the user must dismiss it and scroll to reach every other field. Recurring/installment entry lives in separate screens, so "coffee" and "new phone on 10-month plan" need different flows | **Money Manager-style entry form** (§7.2): stacked field rows, every picker (including the amount keypad) opens in a **fixed bottom panel** — the system keyboard opens only for free-text fields. The keypad is in-app with `+ − × ÷ =`. A Rep/Inst. control on the form creates a recurring rule or an installment inline |
+| **D10** *(v3)* | Flat category list | Real usage wants "Food → coffee / restaurant / delivery" — one flat level either explodes into dozens of tiles or loses the detail; Money Manager's two-level picker is the model | Two-level categories: `parent_id` on `categories`, max depth 1 (§4.2). Transactions may point at a main or a sub; reports roll up to mains and drill down into subs |
+| **D11** *(v3)* | Card-billed installment periods wait for a manual "mark period paid" tap | The charge hits the real statement whether or not anyone taps — un-marked periods make the app's cycle total drift from the statement, which is exactly the drift D3 was built to kill | **Auto-materialise** card-billed installment periods as transactions on their period date (same idempotent engine as D8), and give every card a **statement view**: its transactions grouped per billing cycle with the cycle total, due date and paid status (§6.7, §7.3) |
 
 ### 1.3 Pain point → the feature that answers it
 
@@ -195,11 +200,14 @@ create table categories (
   name          text not null,
   kind          category_kind not null,
   icon          text,
+  parent_id     uuid references categories(id),       -- D10: null = main category
   sort_order    int not null default 0,
   archived      boolean not null default false,
   unique (id, kind)                                   -- supports the composite FK below
 );
 ```
+
+**Sub-categories (D10).** `parent_id` gives exactly two levels: a main category (`parent_id is null`) and its subs. Depth stays at 1 — a sub's parent must itself be a main — enforced by a trigger (a plain `check` cannot look at the parent row). A sub inherits its parent's `kind` (also trigger-enforced). Transactions reference the most specific category the user picked: a main when no sub was chosen, otherwise the sub. Every report groups by the **effective main** (`coalesce(parent_id, category_id)`) and offers subs as the drill-down level. Existing flat categories migrate as mains, unchanged; archiving a main archives its subs.
 
 ### 4.3 Transactions (including transfers — D7)
 
@@ -383,6 +391,8 @@ create table installment_payments (
 
 `transaction_id` is the single source of truth for whether the money actually left an account: for account-billed installments the app always creates the paired transaction when a period is marked paid (see §6.3), so balances cannot drift.
 
+**v3 (D11): who writes `installment_payments` changed — the schema did not.** For **card-billed** plans the installment materialiser (§6.7) now creates the period's transaction and its `installment_payments` row automatically on the period date; the manual "mark period paid" button disappears for them. For **account-billed** plans the materialiser creates the transaction *unconfirmed* into the review strip — a real bank debit still gets a human glance before it moves a balance — and confirming it writes the payment row. Undo remains: soft-deleting the transaction removes the payment event (D2 is unchanged, events not counters).
+
 ### 4.6 Budgets
 
 ```sql
@@ -485,7 +495,8 @@ cycleOf(card: Card, date: Date): Cycle   // { start, end, dueDate }
 
 // What is due on a card for one cycle?
 //   sum(transactions charged to the card within the cycle, excluding transfers TO the card)
-// + sum(installment periods falling in the cycle)
+// + sum(installment periods falling in the cycle that are NOT yet materialised
+//       as transactions — projection only; see below)
 // + the cycle's adjustment row, if any
 cycleBill(card: Card, cycle: Cycle, txns, insts, adjustments): number
 
@@ -495,6 +506,8 @@ forwardSchedule(ctx, months = 12): ScheduleRow[]
 ```
 
 Transfers *to* a card are bill payments and must be excluded from `cycleBill` (they settle it) while still reducing the paying account's balance.
+
+**v3 (D11) double-count guard:** once the materialiser (§6.7) turns a period into a real transaction, that period is inside the "transactions" term — the "installment periods" term must count **only periods with no `installment_payments` row yet** (i.e. future/projected ones). The pre-v3 formula counted every period in the cycle separately from transactions; keeping that after materialisation would double-count each charge. This mirrors the §6.2 rule and must be covered by the same unit tests.
 
 ### 6.2 Installment balances and credit utilisation
 
@@ -569,6 +582,26 @@ projectForward(rules, from, to): ProjectedTransaction[]
 
 **Relationship to installments.** Installments are *not* recurring rules — they have a known number of periods, a payoff balance and an interest rate, and they feed the debt plan. Recurring rules are open-ended obligations. Keeping them separate keeps both models honest.
 
+### 6.7 Installment materialiser (D11 — v3)
+
+The same shape as §6.6, applied to installment periods:
+
+```ts
+// Materialise every period of every active installment whose periodDate
+// (§6.1) is <= today and has no installment_payments row yet.
+// Idempotent the same way: the generated transaction carries
+// source = 'installment' and source_key = `installment:<id>:<period_no>`,
+// backed by the existing unique index on (household_id, source, source_key);
+// insert ... on conflict do nothing, then write the payment row linked to it.
+materialiseInstallmentsDue(installments, today): Transaction[]
+```
+
+* **Card-billed periods** post `confirmed = true` — the charge is on the statement regardless of what the user does, so the app should already agree with the statement (the whole point of D11). The transaction is an expense on the card, dated `periodDate`, category from the installment.
+* **Account-billed periods** post `confirmed = false` into the §6.6 review strip; confirming is what commits the balance movement. Rationale in §4.5.
+* Runs in the same on-open/on-focus pass as `materialiseDue` — one shared "catch up now" entry point.
+* Editing/cancelling an installment affects future periods only; posted periods are ordinary transactions, exactly like edited recurring rules.
+* `projectForward` gains a sibling for installments so the forward calendar and `cycleBill`'s projection term (§6.1) come from one function, not two formulas.
+
 ---
 
 ## 7. UX design
@@ -591,26 +624,41 @@ projectForward(rules, from, to): ProjectedTransaction[]
 * Settings sits behind the avatar in the top-right rather than consuming a tab.
 * Desktop: the bottom nav becomes a sidebar and content goes two-column. Same components throughout.
 
-### 7.2 Quick-add: the most important flow (principle 2)
+### 7.2 Transaction entry: the most important flow (principle 2) — v3, Money Manager style (D9)
 
-Tap the FAB → a single bottom sheet:
+The v2 quick-add (amount-first with the system numpad auto-opening over a scrolling drawer) failed in real use on iOS: the keyboard shrinks the visual viewport, the drawer gets shoved up, and reaching any other field means dismissing the keyboard and scrolling back. v3 adopts the layout of the **Money Manager** app, which the user knows and prefers:
 
-1. **The amount comes first** (numpad opens automatically) — it is the first thing the user knows.
-2. Categories are an **icon grid**, not a dropdown, ordered by frequency of use.
-3. Smart defaults: date = today, kind = expense, owner = the logged-in person, account/card = the one last used with that category.
-4. Description and note are optional and collapsed.
-5. Save → optimistic update, with an undo button in the toast.
+```
+┌──────────────────────────────┐
+│  [ Income | Expense | Transfer ]     ← segments (unchanged)
+│  Date      Fri 31/07      ⟳ Rep/Inst.
+│  Amount    240.00                    ← opens keypad below, not the keyboard
+│  Category  Food › Coffee             ← opens picker below
+│  Account   KTC                       ← opens picker below
+│  Note      _______________           ← free text, system keyboard OK
+├──────────────────────────────┤
+│        fixed picker panel            ← swaps between keypad /
+│   (keypad · category grid · …)         category grid / instrument list
+└──────────────────────────────┘
+```
 
-Target: the common case (a ฿65 coffee) is **four taps**: FAB → 65 → Food → Save.
+1. **A stacked field form on top, one fixed picker panel below.** Tapping a field row swaps the panel's content; the form itself never moves or scrolls. The panel is part of the sheet, not an overlay, so the form rows stay visible and tappable the whole time.
+2. **The amount keypad is in-app** — digits plus `+ − × ÷ =`, so quick arithmetic ("120+85+60") happens inline, and the **system keyboard never opens for the amount**. This is the durable fix for the iOS viewport-shove bug; the system keyboard appears only for note/description, which sit last so nothing else needs reaching while it is up.
+3. **Category panel is the D10 two-level grid**: main categories ordered by frequency of use; a main with subs expands them in place (Money Manager's chevron pattern); a main without subs selects immediately. Long-press → manage categories.
+4. **Rep/Inst. lives on the form** (next to the date, as in Money Manager): one control that turns the entry into a recurring rule ("repeat") or an installment plan ("instalment", asking only periods + optional final amount) with everything already typed carried over. No separate screens to start from.
+5. Smart defaults unchanged: date = today, kind = expense, owner = the logged-in person, instrument = last used with that category. Save → optimistic update with undo in the toast.
 
-Transfers are a third segment in the same sheet ("Income / Expense / Transfer"), which swaps the category grid for a from/to instrument picker. Card-bill payment is offered as a preset from the card detail page with the amount pre-filled from `cycleBill`.
+Target unchanged: a ฿65 coffee is **four taps** — FAB → `6` `5` → Food → Save (amount panel is the default on open).
+
+Transfers swap the category panel for a from/to instrument picker, as before. Card-bill payment stays a preset on the card statement view (§7.3) with the amount pre-filled from `cycleBill`.
 
 ### 7.3 Other screens (only where they differ from the baseline)
 
 * **Home**: monthly summary first (primary) → "set aside for the next billing cycle" (secondary), ordered by nearest due date → six-month trend → category bars (tap a category to drill into its transactions). See §6.5.
 * **Transactions**: a review strip at the top when unconfirmed recurring rows exist; below it, a list grouped by day. Each row shows category icon, description, instrument, owner colour and amount. Swipe to edit/delete, full-text search. Transfers render with a distinct arrow treatment and are visibly excluded from the totals.
-* **Installments**: a card per plan with a progress bar, a red badge for rates ≥5% p.a., and a one-tap "pay this period" (creates the `installment_payment` plus its paired transaction). Completed plans collapse into a "finished" section.
-* **Accounts**: two sections (accounts and cards) per the baseline. Cards show a mini gauge of used vs. available credit and the next statement/due dates; accounts have a Reconcile button. Card detail lists the current cycle's charges and offers "reconcile to statement" (writes a `card_cycle_adjustments` row).
+* **Installments**: a card per plan with a progress bar and a red badge for rates ≥5% p.a. *(v3)* Card-billed plans no longer have a pay button — periods post themselves (§6.7) and the row shows "posted through period n/N" instead; account-billed plans surface their due period in the review strip rather than here. Completed plans collapse into a "finished" section.
+* **Accounts**: two sections (accounts and cards) per the baseline. Cards show a mini gauge of used vs. available credit and the next statement/due dates; accounts have a Reconcile button.
+* **Card statement view** *(v3 — D11)*: tapping a card opens its transactions grouped by **billing cycle**, newest first — the in-app version of the old sheet's per-cycle summary (SPEC §5), and the reason auto-posting matters: the list should read like the issuer's statement. Each cycle section has a header with the cycle date range, `cycleBill` total, due date, and a paid indicator (transfers to the card in the window vs. the total); inside are that cycle's charges — manual spends and auto-posted installment periods alike, the latter tagged with their period number ("Notebook · 4/10"). Swiping between cycles moves through history; the current (open) cycle sits on top with its projected remainder in a lighter tone. "Reconcile to statement" (writes a `card_cycle_adjustments` row) and "pay bill" (pre-filled transfer) both live in the cycle header.
 * **Plan**: four sub-tabs — forward calendar (months × card/account, high months highlighted, projected recurring items shown in a lighter tone and labelled), budgets (green/amber/red bars), debt payoff (avalanche plus simulator), and **recurring rules** (list of rules with next occurrence date, amount, owner; toggle active; add/edit).
 
 ### 7.4 Language and formatting
@@ -655,8 +703,9 @@ Transfers are a third segment in the same sheet ("Income / Expense / Transfer"),
 | **0. Foundation** | Vite + TS + Tailwind project, Supabase (schema, RLS, migrations), CI (typecheck + test), Vercel deploy | The URL opens, login works, the schema is complete |
 | **1. Core capture** | Auth + invite, accounts/cards/categories CRUD, transactions including transfers, quick-add, recurring rules, sheet import, **read-only per-cycle card totals** | Both people use it instead of the sheet day to day, and the per-card, per-cycle figure matches the sheet |
 | **2. Installments and cycles** | Installments + period payments, full Billing Cycle Engine with unit tests, Dashboard "set aside", credit utilisation | The "due per card per cycle" figure matches the old sheet for every card |
+| **2.5 v3 revamp** *(added 2026-07-31)* | Money Manager-style entry form with in-app calculator keypad (D9), sub-categories + migration (D10), installment materialiser + card statement view, retiring "mark paid" for card-billed plans (D11), `cycleBill` double-count guard (§6.1) | Adding any transaction — one-off, recurring or installment — starts from the same form with no system-keyboard jump; each card's statement view matches the real statement for the last three cycles |
 | **3. Planning** | 12-month forward calendar (including recurring projections), category budgets, avalanche + simulator | It can actually drive a payoff decision |
-| **4. Polish** | PWA + offline reads, realtime sync, dark mode, full charts, reconcile | Installed on both phones and pleasant to use |
+| **4. Polish** | PWA + offline reads *(shipped early, 2026-07-30)*, realtime sync, dark mode, full charts, reconcile | Installed on both phones and pleasant to use |
 | **5. Future** | Investment and retirement planning (undesigned), due-date push notifications, data export | — |
 
 > Phase 1 is the "can replace the sheet" milestone and should be reached as fast as possible, then validated with real use before phase 2 begins. Note that the per-cycle card total moved into phase 1 as a read-only view: it is the single most valuable thing the old sheet produced, so the app cannot claim to replace the sheet without it.

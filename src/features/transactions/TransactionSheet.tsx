@@ -5,10 +5,12 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
+import { Keypad } from '@/components/Keypad'
 import { OwnerSelect } from '@/components/OwnerSelect'
+import { appendKey, evaluateExpression, formatResult } from '@/lib/calculator'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { useCategories, type Category } from '@/lib/categories'
 import { useCategoryUsage } from '@/lib/categoryUsage'
@@ -47,7 +49,11 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const remove = useDeleteTransaction(householdId)
 
   const [kind, setKind] = useState<TransactionKind>(transaction?.kind ?? 'expense')
-  const [amount, setAmount] = useState(transaction ? String(transaction.amount) : '')
+  // The raw calculator expression as typed (e.g. "120+85"), not just the
+  // final number — the in-app keypad (DESIGN.md §7.2 D9) replaces the
+  // system numeric keyboard entirely for this field.
+  const [amountExpr, setAmountExpr] = useState(transaction ? String(transaction.amount) : '')
+  const [keypadOpen, setKeypadOpen] = useState(false)
   const [categoryId, setCategoryId] = useState<string | null>(transaction?.category_id ?? null)
   const [from, setFrom] = useState<Instrument>({
     accountId: transaction?.from_account_id ?? null,
@@ -90,11 +96,23 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   const ownerLabel = ownerId ? (members.find((m) => m.id === ownerId)?.display_name ?? 'Shared') : 'Shared'
   const dateLabel = date === today() ? 'Today' : date
+  const amountValue = evaluateExpression(amountExpr)
 
   const canSave =
-    Number(amount) > 0 &&
+    amountValue > 0 &&
     (kind === 'transfer' ? Boolean(to.accountId || to.cardId) : Boolean(categoryId)) &&
     Boolean(from.accountId || from.cardId)
+
+  function pressKey(key: string) {
+    setAmountExpr((prev) => appendKey(prev, key))
+  }
+
+  function pressEquals() {
+    setAmountExpr((prev) => {
+      const value = evaluateExpression(prev)
+      return value > 0 ? formatResult(value) : ''
+    })
+  }
 
   function changeKind(next: TransactionKind) {
     setKind(next)
@@ -114,7 +132,8 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   }
 
   function resetForNextEntry() {
-    setAmount('')
+    setAmountExpr('')
+    setKeypadOpen(false)
     setDescription('')
     setNote('')
     setCategoryId(null)
@@ -130,7 +149,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
       categoryId: kind === 'transfer' ? null : categoryId,
       categoryKind: kind === 'transfer' ? null : (kind as 'income' | 'expense'),
       description,
-      amount: Number(amount),
+      amount: amountValue,
       ownerId,
       fromAccountId: from.accountId,
       fromCardId: from.cardId,
@@ -172,15 +191,23 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
         </DrawerHeader>
 
         <div className="space-y-4 px-4 pb-4">
-          <Input
-            type="number"
-            inputMode="decimal"
-            autoFocus
-            placeholder="0.00"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="h-14 text-center text-3xl font-semibold"
-          />
+          {/* The in-app keypad (below, in the sticky footer) is the only way
+              to edit this — no system numeric keyboard, which is what used to
+              shove the whole sheet up on iOS (DESIGN §7.2 D9). */}
+          <button
+            type="button"
+            onClick={() => setKeypadOpen(true)}
+            className={cn(
+              'flex h-14 w-full items-center justify-center rounded-lg border text-3xl font-semibold transition-colors',
+              keypadOpen ? 'border-primary bg-primary/5' : 'border-input',
+            )}
+          >
+            {amountExpr ? (
+              <span className="truncate px-2">{amountExpr}</span>
+            ) : (
+              <span className="text-muted-foreground">0.00</span>
+            )}
+          </button>
 
           <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
             <TabsList className="w-full">
@@ -290,18 +317,24 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
               </div>
             </>
           )}
-
-          <div className="flex gap-2">
-            {transaction && (
-              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete transaction">
-                <Trash2 className="size-4" />
-              </Button>
-            )}
-            <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
-              Save
-            </Button>
-          </div>
         </div>
+
+        <DrawerFooter>
+          {keypadOpen ? (
+            <Keypad onKey={pressKey} onEquals={pressEquals} onDone={() => setKeypadOpen(false)} />
+          ) : (
+            <div className="flex gap-2">
+              {transaction && (
+                <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete transaction">
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+              <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
+                Save
+              </Button>
+            </div>
+          )}
+        </DrawerFooter>
       </DrawerContent>
     </Drawer>
   )

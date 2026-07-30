@@ -82,7 +82,13 @@ function DrawerFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="drawer-footer"
-      className={cn("mt-auto flex flex-col gap-2 p-4", className)}
+      className={cn(
+        // Sticky, not just mt-auto: on a form taller than the sheet, the
+        // footer (or a swapped-in picker panel, e.g. Keypad) must stay
+        // reachable without scrolling past the rest of the fields first.
+        "sticky bottom-0 z-10 mt-auto flex flex-col gap-2 border-t bg-popover p-4",
+        className
+      )}
       {...props}
     />
   )

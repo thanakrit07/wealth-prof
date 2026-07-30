@@ -30,6 +30,8 @@ These observations from the source sheet motivate the feature set:
 
 ## 4. Features (from the current prototype — used as the baseline)
 
+> **Superseded in places by DESIGN v3 (2026-07-31).** After real phase-1 use, the user chose the **Money Manager** app as the UX reference for data entry. The deltas against this baseline: transaction entry becomes a field-form with a fixed picker panel and an in-app calculator keypad, with recurring/installment creation inline (DESIGN D9); categories become two-level main/sub (D10); card-billed installment periods post their transactions automatically and each card gains a per-billing-cycle statement view, replacing the manual "paid this period" button of §4.3 (D11).
+
 ### 4.1 Dashboard
 
 * Income / expense / balance summary for the selected month, split by person (person 1 / person 2 / shared).
