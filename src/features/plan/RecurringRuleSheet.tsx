@@ -72,7 +72,12 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
   const [variableAmount, setVariableAmount] = useState(rule?.variable_amount ?? false)
   const [active, setActive] = useState(rule?.active ?? true)
 
-  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
+  const flatCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
+  // Mains followed immediately by their own subs (D10) — a flat dropdown
+  // still needs to read as a hierarchy, not a shuffled list.
+  const relevantCategories = flatCategories
+    .filter((c) => c.parent_id === null)
+    .flatMap((main) => [main, ...flatCategories.filter((c) => c.parent_id === main.id)])
 
   const canSave =
     name.trim().length > 0 &&
@@ -160,7 +165,7 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
                 </SelectTrigger>
                 <SelectContent>
                   {relevantCategories.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    <SelectItem key={c.id} value={c.id}>{c.parent_id ? `↳ ${c.name}` : c.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

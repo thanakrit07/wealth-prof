@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, MoreHorizontal, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, ChevronDown, MoreHorizontal, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -75,22 +75,37 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   // Once the user picks an instrument by hand (or is editing an existing
   // row), category taps must stop auto-overriding it.
   const [fromTouched, setFromTouched] = useState(Boolean(transaction))
+  // D10: which main category's subs are showing (Money Manager's chevron
+  // pattern — a main with subs expands them in place instead of selecting
+  // immediately). Auto-opens when editing a transaction filed under a sub.
+  const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
 
-  const relevantCategories = (categories ?? [])
-    .filter((c) => !c.archived && c.kind === kind)
-    .sort((a, b) => {
-      const byUsage = (usage?.counts.get(b.id) ?? 0) - (usage?.counts.get(a.id) ?? 0)
-      return byUsage !== 0 ? byUsage : a.sort_order - b.sort_order
-    })
+  useEffect(() => {
+    if (!transaction?.category_id || !categories) return
+    const current = categories.find((c) => c.id === transaction.category_id)
+    if (current?.parent_id) setExpandedMainId(current.parent_id)
+  }, [categories, transaction?.category_id])
+
+  const byUsageThenOrder = (a: Category, b: Category) => {
+    const byUsage = (usage?.counts.get(b.id) ?? 0) - (usage?.counts.get(a.id) ?? 0)
+    return byUsage !== 0 ? byUsage : a.sort_order - b.sort_order
+  }
+  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
+  const mainCategories = relevantCategories.filter((c) => c.parent_id === null).sort(byUsageThenOrder)
+  const subsOf = (parentId: string) => relevantCategories.filter((c) => c.parent_id === parentId).sort(byUsageThenOrder)
 
   // With 8 or fewer categories everything fits in 2 rows anyway, so the
-  // More tile would only add a row. The selected category must always be
-  // visible, so a hidden selection (e.g. while editing) forces expansion.
-  const needsMoreTile = relevantCategories.length > COLLAPSED_TILES + 1
+  // More tile would only add a row. The selected category's main must
+  // always be visible, so a hidden selection (e.g. while editing) forces
+  // expansion.
+  const needsMoreTile = mainCategories.length > COLLAPSED_TILES + 1
+  const selectedCategory = categoryId ? relevantCategories.find((c) => c.id === categoryId) : null
+  const selectedMainId = selectedCategory ? (selectedCategory.parent_id ?? selectedCategory.id) : null
   const selectionHidden =
-    categoryId != null && relevantCategories.slice(COLLAPSED_TILES).some((c) => c.id === categoryId)
+    selectedMainId != null && mainCategories.slice(COLLAPSED_TILES).some((c) => c.id === selectedMainId)
   const showAll = gridExpanded || !needsMoreTile || selectionHidden
-  const visibleCategories = showAll ? relevantCategories : relevantCategories.slice(0, COLLAPSED_TILES)
+  const visibleCategories = showAll ? mainCategories : mainCategories.slice(0, COLLAPSED_TILES)
+  const expandedSubs = expandedMainId ? subsOf(expandedMainId) : []
 
   const ownerLabel = ownerId ? (members.find((m) => m.id === ownerId)?.display_name ?? 'Shared') : 'Shared'
   const dateLabel = date === today() ? 'Today' : date
@@ -103,6 +118,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   function changeKind(next: TransactionKind) {
     setKind(next)
     setGridExpanded(false)
+    setExpandedMainId(null)
     // A category from the other kind would violate the DB's composite FK.
     const current = categories?.find((c) => c.id === categoryId)
     if (current && current.kind !== next) setCategoryId(null)
@@ -124,6 +140,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     setNote('')
     setCategoryId(null)
     setGridExpanded(false)
+    setExpandedMainId(null)
     setMetaOpen(false)
     setDetailsOpen(false)
   }
@@ -194,30 +211,70 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           </Tabs>
 
           {kind !== 'transfer' ? (
-            <div className="grid grid-cols-4 gap-2">
-              {visibleCategories.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => selectCategory(c)}
-                  className={cn(
-                    'flex flex-col items-center gap-1 rounded-lg border p-2 text-xs',
-                    categoryId === c.id ? 'border-primary bg-primary/10' : 'border-border',
-                  )}
-                >
-                  <CategoryIcon icon={c.icon} className="size-5" />
-                  <span className="w-full truncate text-center">{c.name}</span>
-                </button>
-              ))}
-              {!showAll && (
-                <button
-                  onClick={() => setGridExpanded(true)}
-                  className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border p-2 text-xs text-muted-foreground"
-                >
-                  <MoreHorizontal className="size-5" />
-                  <span>More</span>
-                </button>
+            <>
+              <div className="grid grid-cols-4 gap-2">
+                {visibleCategories.map((c) => {
+                  const subs = subsOf(c.id)
+                  const hasSubs = subs.length > 0
+                  const isExpandedMain = expandedMainId === c.id
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        if (hasSubs) {
+                          setExpandedMainId(isExpandedMain ? null : c.id)
+                        } else {
+                          selectCategory(c)
+                          setExpandedMainId(null)
+                        }
+                      }}
+                      className={cn(
+                        'relative flex flex-col items-center gap-1 rounded-lg border p-2 text-xs',
+                        categoryId === c.id || isExpandedMain ? 'border-primary bg-primary/10' : 'border-border',
+                      )}
+                    >
+                      <CategoryIcon icon={c.icon} className="size-5" />
+                      <span className="w-full truncate text-center">{c.name}</span>
+                      {hasSubs && (
+                        <ChevronDown
+                          className={cn(
+                            'absolute top-1 right-1 size-3 text-muted-foreground transition-transform',
+                            isExpandedMain && 'rotate-180',
+                          )}
+                        />
+                      )}
+                    </button>
+                  )
+                })}
+                {!showAll && (
+                  <button
+                    onClick={() => setGridExpanded(true)}
+                    className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border p-2 text-xs text-muted-foreground"
+                  >
+                    <MoreHorizontal className="size-5" />
+                    <span>More</span>
+                  </button>
+                )}
+              </div>
+
+              {expandedSubs.length > 0 && (
+                <div className="grid grid-cols-4 gap-2 rounded-lg bg-muted/50 p-2">
+                  {expandedSubs.map((sub) => (
+                    <button
+                      key={sub.id}
+                      onClick={() => selectCategory(sub)}
+                      className={cn(
+                        'flex flex-col items-center gap-1 rounded-lg border bg-background p-2 text-xs',
+                        categoryId === sub.id ? 'border-primary bg-primary/10' : 'border-border',
+                      )}
+                    >
+                      <CategoryIcon icon={sub.icon} className="size-4" />
+                      <span className="w-full truncate text-center">{sub.name}</span>
+                    </button>
+                  ))}
+                </div>
               )}
-            </div>
+            </>
           ) : (
             <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
               <ArrowRightLeft className="size-4" />

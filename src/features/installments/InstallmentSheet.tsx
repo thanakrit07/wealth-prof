@@ -55,7 +55,12 @@ export function InstallmentSheet({ installment, onClose }: Props) {
   const [ownerId, setOwnerId] = useState<string | null>(installment?.owner_id ?? null)
   const [note, setNote] = useState(installment?.note ?? '')
 
-  const expenseCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
+  const flatExpenseCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
+  // Mains followed immediately by their own subs (D10) — a flat dropdown
+  // still needs to read as a hierarchy, not a shuffled list.
+  const expenseCategories = flatExpenseCategories
+    .filter((c) => c.parent_id === null)
+    .flatMap((main) => [main, ...flatExpenseCategories.filter((c) => c.parent_id === main.id)])
 
   const canSave =
     name.trim().length > 0 &&
@@ -112,7 +117,7 @@ export function InstallmentSheet({ installment, onClose }: Props) {
               <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
               <SelectContent>
                 {expenseCategories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  <SelectItem key={c.id} value={c.id}>{c.parent_id ? `↳ ${c.name}` : c.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
