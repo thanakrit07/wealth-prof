@@ -5,6 +5,8 @@
 > **v2 changes:** rewritten in English; added transfers as a first-class transaction kind (D7); added recurring transactions (D8); fixed credit-utilisation double counting, per-cycle card adjustments, soft delete, RLS coverage of child tables, interest-rate units, and the import strategy.
 >
 > **v3 changes (2026-07-31, after real phase-1 use):** transaction entry redesigned after the **Money Manager** app, which the user prefers over the v2 quick-add — a field-form sheet with pickers in a fixed bottom panel and an in-app calculator keypad (D9); two-level categories (D10); card-billed installment periods materialise as transactions automatically and every card gets a per-cycle statement view, replacing manual "mark period paid" (D11).
+>
+> **v3.1 changes (2026-07-31, navigation redesign):** Transactions becomes the landing tab (the user opens the app to jot and check entries); the month/person header renders only on tabs it applies to, and the month label opens a month-year picker; Home becomes **Overview** with a card-bills-due-this-month section (per billing cycle, tied to the month filter) and a collapsed category rollup; category icons become a nameless grid plus **emoji** as custom icons; stack decision recorded: stay TS + Supabase, self-maintainability via [ARCHITECTURE.md](./ARCHITECTURE.md) instead of a Go monorepo.
 
 ---
 
@@ -207,6 +209,8 @@ create table categories (
   unique (id, kind)                                   -- supports the composite FK below
 );
 ```
+
+**Icons (v3.1).** `categories.icon` stores either a **known icon key** (curated lucide set in `src/lib/categoryIcons.tsx`) or a **literal emoji string** typed by the user — the renderer falls back to printing the raw string when the key is unknown, so custom icons need no schema change, no upload, and work offline. The picker is a nameless icon grid plus an emoji input.
 
 **Sub-categories (D10).** `parent_id` gives exactly two levels: a main category (`parent_id is null`) and its subs. Depth stays at 1 — a sub's parent must itself be a main — enforced by a trigger (a plain `check` cannot look at the parent row). A sub inherits its parent's `kind` (also trigger-enforced). Transactions reference the most specific category the user picked: a main when no sub was chosen, otherwise the sub. Every report groups by the **effective main** (`coalesce(parent_id, category_id)`) and offers subs as the drill-down level. Existing flat categories migrate as mains, unchanged; archiving a main archives its subs.
 
@@ -607,22 +611,23 @@ materialiseInstallmentsDue(installments, today): Transaction[]
 
 ## 7. UX design
 
-### 7.1 Screen structure (mobile-first)
+### 7.1 Screen structure (mobile-first) — v3.1
 
 ```
 ┌──────────────────────────────┐
-│  ‹ Jul 2026 ›  [P1|P2|Shared|All]   ← sticky header on every tab
-│                              │
+│  ‹ Jul 2026 ›  [P1|P2|Shared|All]   ← header only on Transactions/Overview
+│                              │        (tap the month → month-year picker)
 │         tab content          │
 │                              │
 │                        (+)   │  ← FAB, floating on every tab
 ├──────────────────────────────┤
-│ Home  Txns  Plans  Accounts  Plan │  ← 5-tab bottom nav
+│ Txns  Overview  Accounts  Plan  Settings │  ← 5-tab bottom nav
 └──────────────────────────────┘
 ```
 
-* **The month picker and person filter live in one place and apply to every tab** — never re-set per screen (state persisted in the URL).
-* Settings sits behind the avatar in the top-right rather than consuming a tab.
+* **Transactions is the landing tab** *(v3.1)* — the observed daily habit is "open → jot what was spent → check what's been recorded", so the ledger comes first; the old Home is renamed **Overview** and moves to slot two.
+* **The month/person header renders only on the tabs it filters** *(v3.1)*: Transactions and Overview. Accounts shows current state and Plan is forward-looking — a month filter there was noise. The month/person state itself stays global and URL-persisted, so switching tabs never resets it.
+* **Month-year picker** *(v3.1)*: tapping the month label opens a drawer with a year stepper and a 12-month grid plus a "This month" shortcut (the Money Manager pattern) — replaces tapping ‹ twelve times to reach last year.
 * Desktop: the bottom nav becomes a sidebar and content goes two-column. Same components throughout.
 
 ### 7.2 Transaction entry: the most important flow (principle 2) — v3, Money Manager style (D9)
@@ -655,7 +660,10 @@ Transfers swap the category panel for a from/to instrument picker, as before. Ca
 
 ### 7.3 Other screens (only where they differ from the baseline)
 
-* **Home**: monthly summary first (primary) → "set aside for the next billing cycle" (secondary), ordered by nearest due date → six-month trend → category bars (tap a category to drill into its transactions). See §6.5.
+* **Overview** (was Home; v3.1): the planning page, driven by the selected month M —
+  1. Monthly cash-flow summary (income/expense/net) and the by-person split, as before.
+  2. **Card bills due in month M**: one row per active card showing the billing cycle **whose due date falls in M** — cycle range label ("20 Jul – 19 Aug"), `cycleBill` total (with the §6.1 double-count guard), due date, and a paid indicator (transfers to the card inside the cycle vs. the bill). Header total = "cash to prepare for cards this month". Viewing next month answers "เดือนหน้าต้องเตรียมเท่าไหร่". Tapping a row opens the card statement view anchored to that cycle. This replaces the today-anchored "set aside" card, which could not look ahead.
+  3. **Spending by category, collapsed by default** (one summary row; tap to expand) and rolled up to **effective mains** (D10): a sub-filed transaction counts under its parent; a main with subs expands inline to its sub breakdown; tapping navigates to Transactions filtered by that category (a main's filter matches its subs' transactions too).
 * **Transactions**: a review strip at the top when unconfirmed recurring rows exist; below it, a list grouped by day. Each row shows category icon, description, instrument, owner colour and amount. Swipe to edit/delete, full-text search. Transfers render with a distinct arrow treatment and are visibly excluded from the totals.
 * **Installments**: a card per plan with a progress bar and a red badge for rates ≥5% p.a. *(v3)* Card-billed plans no longer have a pay button — periods post themselves (§6.7) and the row shows "posted through period n/N" instead; account-billed plans surface their due period in the review strip rather than here. Completed plans collapse into a "finished" section.
 * **Accounts**: two sections (accounts and cards) per the baseline. Cards show a mini gauge of used vs. available credit and the next statement/due dates; accounts have a Reconcile button.
