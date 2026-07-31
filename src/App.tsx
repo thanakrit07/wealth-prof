@@ -22,7 +22,9 @@ import { useSession } from './lib/useSession'
 function SignedInApp({ self }: { self: HouseholdMember }) {
   const [month, setMonth] = useUrlState('month', currentMonthKey())
   const [person, setPerson] = useUrlState('person', 'all')
-  const [tab, setTab] = useUrlState('tab', 'home')
+  // Transactions is the landing tab (DESIGN.md §7.1 v3.1): the daily habit
+  // is "open → jot what was spent → check what's recorded".
+  const [tab, setTab] = useUrlState('tab', 'transactions')
   const [category, setCategory] = useUrlState('cat', '')
   const [quickAddOpen, setQuickAddOpen] = useState(false)
 
