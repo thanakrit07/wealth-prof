@@ -64,6 +64,24 @@ export function cycleOf(card: CardLike, date: string): Cycle {
   return { start, end, dueDate }
 }
 
+/**
+ * The billing cycle whose **due date falls in month M** (`yyyy-MM`), for the
+ * Overview page's "cash to prepare this month" (DESIGN.md §7.3 v3.1).
+ *
+ * Inverts `cycleOf`'s due-date rule: a cycle closing in month E is due in E
+ * when due_day > statement_day, otherwise in E+1 — so the cycle due in M
+ * closes in M or M-1 respectively. Every card has exactly one such cycle per
+ * month (due_day is clamped into range), so this is always well-defined.
+ */
+export function cycleDueInMonth(card: CardLike, monthKey: string): Cycle {
+  const [year, month] = monthKey.split('-').map(Number)
+  const endMonth =
+    card.due_day <= card.statement_day ? addMonths(year, month - 1, -1) : { year, month0: month - 1 }
+  // A date exactly on the statement day belongs to the cycle closing that
+  // month, so cycleOf resolves the rest without duplicating the arithmetic.
+  return cycleOf(card, clampedDate(endMonth.year, endMonth.month0, card.statement_day))
+}
+
 /** Shifts a date by `delta` days (negative goes backward). */
 export function addDays(date: string, delta: number): string {
   const { year, month0, day } = parts(date)

@@ -14,6 +14,11 @@ export function monthLabel(monthKey: string): string {
   return format(parse(monthKey, MONTH_KEY, new Date()), 'MMMM yyyy')
 }
 
+// "20 Jul" — for compact date and billing-cycle range labels.
+export function dayMonthLabel(date: string): string {
+  return format(parse(date, 'yyyy-MM-dd', new Date()), 'd MMM')
+}
+
 // Inclusive [start, end] plain-date range for the month, for querying
 // transactions.date (DESIGN.md §4.3 — dates are always Asia/Bangkok).
 export function monthRange(monthKey: string): { start: string; end: string } {

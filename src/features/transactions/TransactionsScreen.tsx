@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ArrowRightLeft, X } from 'lucide-react'
 import { CategoryIcon } from '@/lib/categoryIcons'
-import { useCategories } from '@/lib/categories'
+import { effectiveMainId, useCategories } from '@/lib/categories'
 import { useAccounts } from '@/lib/accounts'
 import { useCards } from '@/lib/cards'
 import { useHousehold } from '@/lib/HouseholdContext'
@@ -37,9 +37,16 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   }, [accounts, cards])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
 
-  const filtered = (transactions ?? []).filter(
-    (t) => matchesPersonFilter(t.owner_id, person) && (!categoryId || t.category_id === categoryId),
-  )
+  // A main category's filter also matches transactions filed under its subs
+  // (D10 rollup) — the Overview breakdown groups by effective main, so
+  // drilling in from there must not drop the sub rows that made up the total.
+  const matchesCategory = (t: Transaction) => {
+    if (!categoryId) return true
+    if (t.category_id === categoryId) return true
+    const category = t.category_id ? categoryById.get(t.category_id) : null
+    return category != null && effectiveMainId(category) === categoryId
+  }
+  const filtered = (transactions ?? []).filter((t) => matchesPersonFilter(t.owner_id, person) && matchesCategory(t))
   const filterCategory = categoryId ? categoryById.get(categoryId) : null
   const groups = useMemo(() => {
     const map = new Map<string, Transaction[]>()

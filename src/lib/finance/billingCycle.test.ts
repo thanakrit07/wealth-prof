@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cycleBill, cycleOf, installmentChargeInCycle, periodDate } from './billingCycle'
+import { cycleBill, cycleDueInMonth, cycleOf, installmentChargeInCycle, periodDate } from './billingCycle'
 
 describe('cycleOf', () => {
   it('places a date after the statement day in the cycle ending next month', () => {
@@ -63,6 +63,56 @@ describe('cycleOf', () => {
     const cycle = cycleOf(card, '2026-01-06')
     expect(cycle.start).toBe('2026-01-06')
     expect(cycle.end).toBe('2026-02-05')
+  })
+})
+
+describe('cycleDueInMonth', () => {
+  it('returns the cycle closing in the same month when due_day > statement_day', () => {
+    // KTC-style: statement 19th, due 25th — the 20 Jul–19 Aug cycle is due 25 Aug.
+    const card = { statement_day: 19, due_day: 25 }
+    expect(cycleDueInMonth(card, '2026-08')).toEqual({
+      start: '2026-07-20',
+      end: '2026-08-19',
+      dueDate: '2026-08-25',
+    })
+  })
+
+  it('returns the previous month\'s cycle when due_day <= statement_day', () => {
+    // Due date rolls past the statement, so August's payment settles the
+    // cycle that closed in July.
+    const card = { statement_day: 19, due_day: 5 }
+    expect(cycleDueInMonth(card, '2026-08')).toEqual({
+      start: '2026-06-20',
+      end: '2026-07-19',
+      dueDate: '2026-08-05',
+    })
+  })
+
+  it('crosses the year boundary when the due month is January', () => {
+    const card = { statement_day: 19, due_day: 5 }
+    expect(cycleDueInMonth(card, '2027-01')).toEqual({
+      start: '2026-11-20',
+      end: '2026-12-19',
+      dueDate: '2027-01-05',
+    })
+  })
+
+  it('clamps statement_day 31 into a short closing month', () => {
+    const card = { statement_day: 31, due_day: 15 }
+    // Closes 31 Mar (due 15 Apr); the cycle starts the day after February's
+    // clamped statement date (28 Feb in 2026).
+    expect(cycleDueInMonth(card, '2026-04')).toEqual({
+      start: '2026-03-01',
+      end: '2026-03-31',
+      dueDate: '2026-04-15',
+    })
+  })
+
+  it('agrees with cycleOf: the returned cycle is really due in the asked month', () => {
+    const card = { statement_day: 19, due_day: 25 }
+    const cycle = cycleDueInMonth(card, '2026-08')
+    expect(cycleOf(card, cycle.end)).toEqual(cycle)
+    expect(cycle.dueDate.slice(0, 7)).toBe('2026-08')
   })
 })
 

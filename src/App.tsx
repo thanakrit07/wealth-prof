@@ -4,7 +4,7 @@ import type { Tab } from '@/components/layout/AppShell'
 import { AuthScreen } from './components/AuthScreen'
 import { HouseholdSetup } from './components/HouseholdSetup'
 import { ResetPasswordScreen } from './components/ResetPasswordScreen'
-import { HomeScreen } from '@/features/home/HomeScreen'
+import { OverviewScreen } from '@/features/home/OverviewScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
 import { AccountsScreen } from '@/features/accounts/AccountsScreen'
@@ -30,7 +30,7 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
 
   const screens: Record<Tab, React.ReactNode> = {
     home: (
-      <HomeScreen
+      <OverviewScreen
         month={month}
         person={person as PersonFilter}
         onCategorySelect={(id) => {
