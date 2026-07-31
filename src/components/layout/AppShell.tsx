@@ -103,7 +103,9 @@ export function AppShell({ month, onMonthChange, person, onPersonChange, tab, on
         <MonthYearPicker month={month} onSelect={onMonthChange} onClose={() => setPickerOpen(false)} />
       )}
 
-      <main className="flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+6rem)]">{children}</main>
+      {/* 9rem clears the FAB, which spans 5rem–8.5rem above the safe area:
+          with less, the last line of a screen's content sits under it. */}
+      <main className="flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+9rem)]">{children}</main>
 
       <Button
         onClick={onQuickAdd}

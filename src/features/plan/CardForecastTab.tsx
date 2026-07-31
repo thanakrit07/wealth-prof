@@ -151,7 +151,9 @@ export function CardForecastTab() {
         })}
       </ul>
 
-      <p className="text-xs text-muted-foreground">
+      {/* pr-20 keeps the text clear of the floating FAB: this tab's content is
+          often shorter than the viewport, so it can't just be scrolled out. */}
+      <p className="pr-20 text-xs text-muted-foreground">
         Future months count committed charges only — installment periods and recurring rules. Day-to-day spending
         that hasn't happened yet is not included.
       </p>
