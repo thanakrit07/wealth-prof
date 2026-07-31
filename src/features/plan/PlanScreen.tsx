@@ -8,6 +8,7 @@ import { useHousehold } from '@/lib/HouseholdContext'
 import { formatBaht } from '@/lib/format'
 import { nextOccurrence } from '@/lib/finance/recurrence'
 import { useRecurringRules, useUpdateRecurringRule, type RecurringRule } from '@/lib/recurring'
+import { CardForecastTab } from './CardForecastTab'
 import { RecurringRuleSheet } from './RecurringRuleSheet'
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -119,11 +120,15 @@ function RecurringTab() {
 export function PlanScreen() {
   return (
     <div className="p-4">
-      <Tabs defaultValue="recurring">
+      <Tabs defaultValue="cards">
         <TabsList className="mb-4 w-full">
+          <TabsTrigger value="cards" className="flex-1">Card bills</TabsTrigger>
           <TabsTrigger value="recurring" className="flex-1">Recurring</TabsTrigger>
           <TabsTrigger value="installments" className="flex-1">Installments</TabsTrigger>
         </TabsList>
+        <TabsContent value="cards">
+          <CardForecastTab />
+        </TabsContent>
         <TabsContent value="recurring">
           <RecurringTab />
         </TabsContent>

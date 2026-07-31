@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { cycleBill, cycleDueInMonth, cycleOf, installmentChargeInCycle, periodDate } from './billingCycle'
+import {
+  cycleBill,
+  cycleDueInMonth,
+  cycleOf,
+  installmentChargeInCycle,
+  periodDate,
+  projectedRecurringInCycle,
+} from './billingCycle'
 
 describe('cycleOf', () => {
   it('places a date after the statement day in the cycle ending next month', () => {
@@ -158,6 +165,60 @@ describe('installmentChargeInCycle', () => {
   })
 })
 
+describe('projectedRecurringInCycle', () => {
+  const cycle = { start: '2026-01-06', end: '2026-02-05', dueDate: '2026-02-20' }
+  const cardId = 'card-1'
+  const monthly = {
+    freq: 'monthly' as const,
+    interval: 1,
+    day_of_month: 15,
+    month_of_year: null,
+    weekday: null,
+    month_end: 'clamp' as const,
+    start_date: '2025-01-15',
+    end_date: null,
+    max_occurrences: null,
+    amount: 350,
+    kind: 'expense' as const,
+    from_card_id: cardId,
+    active: true,
+    last_generated_date: null,
+  }
+
+  it('projects an occurrence falling inside the cycle', () => {
+    expect(projectedRecurringInCycle([monthly], cycle, cardId)).toBe(350)
+  })
+
+  it('ignores rules charged to a different card', () => {
+    expect(projectedRecurringInCycle([{ ...monthly, from_card_id: 'card-2' }], cycle, cardId)).toBe(0)
+  })
+
+  it('ignores inactive rules', () => {
+    expect(projectedRecurringInCycle([{ ...monthly, active: false }], cycle, cardId)).toBe(0)
+  })
+
+  it('ignores income — it does not charge the card', () => {
+    expect(projectedRecurringInCycle([{ ...monthly, kind: 'income' }], cycle, cardId)).toBe(0)
+  })
+
+  it('skips occurrences already materialised, up to the watermark', () => {
+    // The 15 Jan occurrence is already a real transaction, so projecting it
+    // again would double-count it against the transaction total.
+    expect(projectedRecurringInCycle([{ ...monthly, last_generated_date: '2026-01-20' }], cycle, cardId)).toBe(0)
+  })
+
+  it('still projects a later occurrence when the watermark is mid-cycle', () => {
+    // Watermark before the 15th: that occurrence has not been posted yet.
+    expect(projectedRecurringInCycle([{ ...monthly, last_generated_date: '2026-01-10' }], cycle, cardId)).toBe(350)
+  })
+
+  it('counts every occurrence when several fall in one cycle', () => {
+    const weekly = { ...monthly, freq: 'weekly' as const, weekday: 1, day_of_month: null, amount: 100 }
+    // Mondays between 6 Jan and 5 Feb 2026: 12, 19, 26 Jan and 2 Feb.
+    expect(projectedRecurringInCycle([weekly], cycle, cardId)).toBe(400)
+  })
+})
+
 describe('cycleBill', () => {
   const cycle = { start: '2026-01-06', end: '2026-02-05', dueDate: '2026-02-20' }
   const cardId = 'card-1'
@@ -172,22 +233,22 @@ describe('cycleBill', () => {
       // Outside the cycle window.
       { amount: 999, date: '2026-02-10', kind: 'expense' as const, to_card_id: null },
     ]
-    expect(cycleBill(cycle, cardId, transactions, [], null)).toBe(800)
+    expect(cycleBill({ cycle, cardId, transactions, installments: [] })).toBe(800)
   })
 
   it('adds installment charges falling in the cycle', () => {
     const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
-    expect(cycleBill(cycle, cardId, [], installments, null)).toBe(200)
+    expect(cycleBill({ cycle, cardId, transactions: [], installments })).toBe(200)
   })
 
   it('applies the signed adjustment on top', () => {
-    expect(cycleBill(cycle, cardId, [], [], -150)).toBe(-150)
+    expect(cycleBill({ cycle, cardId, transactions: [], installments: [], adjustment: -150 })).toBe(-150)
   })
 
   it('combines transactions, installments, and the adjustment', () => {
     const transactions = [{ amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null }]
     const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
-    expect(cycleBill(cycle, cardId, transactions, installments, 50)).toBe(750)
+    expect(cycleBill({ cycle, cardId, transactions, installments, adjustment: 50 })).toBe(750)
   })
 
   it('does not double-count a period already posted as a transaction (D11)', () => {
@@ -195,6 +256,16 @@ describe('cycleBill', () => {
     // the card — it must appear in txnTotal only, not in both terms.
     const transactions = [{ amount: 200, date: '2026-01-06', kind: 'expense' as const, to_card_id: null }]
     const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
-    expect(cycleBill(cycle, cardId, transactions, installments, null, new Set(['inst-1:1']))).toBe(200)
+    expect(cycleBill({ cycle, cardId, transactions, installments, paidPeriods: new Set(['inst-1:1']) })).toBe(200)
+  })
+
+  it('leaves recurring out of the total unless rules are supplied', () => {
+    const rule = {
+      freq: 'monthly' as const, interval: 1, day_of_month: 15, month_of_year: null, weekday: null,
+      month_end: 'clamp' as const, start_date: '2025-01-15', end_date: null, max_occurrences: null,
+      amount: 350, kind: 'expense' as const, from_card_id: cardId, active: true, last_generated_date: null,
+    }
+    expect(cycleBill({ cycle, cardId, transactions: [], installments: [] })).toBe(0)
+    expect(cycleBill({ cycle, cardId, transactions: [], installments: [], recurringRules: [rule] })).toBe(350)
   })
 })

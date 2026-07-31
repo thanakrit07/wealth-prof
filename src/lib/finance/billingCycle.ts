@@ -1,6 +1,11 @@
 // Billing Cycle Engine (DESIGN.md §6.1–6.2). Dates are plain yyyy-MM-dd
 // strings, always interpreted as Asia/Bangkok (no timezone conversion).
 
+// The .ts extension is required, not stylistic: scripts/import-sheet.ts pulls
+// this module in and is compiled under tsconfig.node.json's `nodenext`
+// resolution, which rejects extensionless relative imports.
+import { occurrencesBetween, type RecurrenceSchedule } from './recurrence.ts'
+
 export interface CardLike {
   statement_day: number
   due_day: number
@@ -145,30 +150,92 @@ export interface TransactionChargeLike {
   to_card_id: string | null
 }
 
+/** A recurring rule, structurally — `RecurringRule` from lib/recurring.ts fits. */
+export interface RecurringChargeLike extends RecurrenceSchedule {
+  amount: number
+  kind: 'income' | 'expense' | 'transfer'
+  from_card_id: string | null
+  active: boolean
+  last_generated_date: string | null
+}
+
+/**
+ * Recurring charges scheduled on a card inside a cycle that are **not yet
+ * real transactions** — the forward-looking half of a future cycle's bill
+ * (DESIGN §7.3 forward calendar).
+ *
+ * The double-count guard is the materialiser's watermark: `materialiseDue`
+ * has already written a transaction for every occurrence up to
+ * `last_generated_date`, and those are in the caller's transaction total, so
+ * projection has to start the day after it.
+ *
+ * Filtering on `from_card_id` naturally excludes rules that *pay* the card
+ * (those carry `to_card_id`), and income never charges a card.
+ */
+export function projectedRecurringInCycle(
+  rules: RecurringChargeLike[],
+  cycle: Cycle,
+  cardId: string,
+): number {
+  let total = 0
+  for (const rule of rules) {
+    if (!rule.active || rule.kind === 'income' || rule.from_card_id !== cardId) continue
+    const watermark = rule.last_generated_date
+    const from = watermark && watermark >= cycle.start ? addDays(watermark, 1) : cycle.start
+    if (from > cycle.end) continue
+    total += occurrencesBetween(rule, from, cycle.end).length * rule.amount
+  }
+  return total
+}
+
+export interface CycleBillInput {
+  cycle: Cycle
+  cardId: string
+  /** Transactions already recorded against the card (any date; filtered here). */
+  transactions: TransactionChargeLike[]
+  /** Active installment plans billed to this card. */
+  installments: InstallmentLike[]
+  /** Signed delta reconciling against the real statement, if any. */
+  adjustment?: number | null
+  /** "<installmentId>:<periodNo>" keys already posted as transactions. */
+  paidPeriods?: ReadonlySet<string>
+  /** Omit to leave future recurring charges out of the total. */
+  recurringRules?: RecurringChargeLike[]
+}
+
 /**
  * What is due on a card for one cycle:
  *   sum(transactions charged to the card within the cycle, excluding
  *       transfers TO the card, which are bill payments that settle it)
- * + sum(installment periods falling in the cycle)
+ * + sum(installment periods falling in the cycle, minus already-posted ones)
+ * + sum(projected recurring charges, when `recurringRules` is supplied)
  * + the cycle's adjustment row, if any.
+ *
+ * Takes an options object rather than positional arguments: every term is a
+ * separate source of charges, and a caller silently omitting one produces a
+ * plausible-looking but wrong number (this already happened once with
+ * `paidPeriods`, which double-counted posted installment periods).
  */
-export function cycleBill(
-  cycle: Cycle,
-  cardId: string,
-  transactionsOnCard: TransactionChargeLike[],
-  installmentsOnCard: InstallmentLike[],
-  adjustment: number | null,
-  paidPeriods: ReadonlySet<string> = new Set(),
-): number {
-  const txnTotal = transactionsOnCard
+export function cycleBill({
+  cycle,
+  cardId,
+  transactions,
+  installments,
+  adjustment = null,
+  paidPeriods = new Set(),
+  recurringRules,
+}: CycleBillInput): number {
+  const txnTotal = transactions
     .filter((t) => t.date >= cycle.start && t.date <= cycle.end)
     .filter((t) => !(t.kind === 'transfer' && t.to_card_id === cardId))
     .reduce((sum, t) => sum + t.amount, 0)
 
-  const installmentTotal = installmentsOnCard.reduce(
+  const installmentTotal = installments.reduce(
     (sum, inst) => sum + installmentChargeInCycle(inst, cycle, paidPeriods),
     0,
   )
 
-  return txnTotal + installmentTotal + (adjustment ?? 0)
+  const recurringTotal = recurringRules ? projectedRecurringInCycle(recurringRules, cycle, cardId) : 0
+
+  return txnTotal + installmentTotal + recurringTotal + (adjustment ?? 0)
 }

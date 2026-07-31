@@ -498,16 +498,25 @@ periodDate(inst: Installment, n: number): Date
 // Which billing cycle does a date fall into for a given card?
 cycleOf(card: Card, date: Date): Cycle   // { start, end, dueDate }
 
-// What is due on a card for one cycle?
+// What is due on a card for one cycle? Takes an options object (v3.1),
+// because a caller that silently omits a term gets a plausible-looking but
+// wrong number — which already happened once with paidPeriods.
 //   sum(transactions charged to the card within the cycle, excluding transfers TO the card)
 // + sum(installment periods falling in the cycle that are NOT yet materialised
-//       as transactions — projection only; see below)
+//       as transactions — `paidPeriods` excludes the posted ones; see below)
+// + sum(projected recurring charges, when `recurringRules` is supplied — v3.1)
 // + the cycle's adjustment row, if any
-cycleBill(card: Card, cycle: Cycle, txns, insts, adjustments): number
+cycleBill(input: CycleBillInput): number
 
-// 12-month forward table per card/account per cycle. Includes projected
-// recurring occurrences (§6.6). Powers both the Plan page and the Dashboard.
-forwardSchedule(ctx, months = 12): ScheduleRow[]
+// The cycle whose DUE DATE falls in month M — powers the Overview card-bills
+// section and the Plan forward calendar (v3.1, §7.3).
+cycleDueInMonth(card: CardLike, monthKey: string): Cycle
+
+// Recurring charges scheduled on a card inside a cycle that are not yet real
+// transactions (v3.1). Double-count guard: everything up to the rule's
+// `last_generated_date` has already been materialised into a transaction by
+// §6.6, so projection starts the day after that watermark.
+projectedRecurringInCycle(rules, cycle, cardId): number
 ```
 
 Transfers *to* a card are bill payments and must be excluded from `cycleBill` (they settle it) while still reducing the paying account's balance.
@@ -668,7 +677,9 @@ Transfers swap the category panel for a from/to instrument picker, as before. Ca
 * **Installments**: a card per plan with a progress bar and a red badge for rates ≥5% p.a. *(v3)* Card-billed plans no longer have a pay button — periods post themselves (§6.7) and the row shows "posted through period n/N" instead; account-billed plans surface their due period in the review strip rather than here. Completed plans collapse into a "finished" section.
 * **Accounts**: two sections (accounts and cards) per the baseline. Cards show a mini gauge of used vs. available credit and the next statement/due dates; accounts have a Reconcile button.
 * **Card statement view** *(v3 — D11)*: tapping a card opens its transactions grouped by **billing cycle**, newest first — the in-app version of the old sheet's per-cycle summary (SPEC §5), and the reason auto-posting matters: the list should read like the issuer's statement. Each cycle section has a header with the cycle date range, `cycleBill` total, due date, and a paid indicator (transfers to the card in the window vs. the total); inside are that cycle's charges — manual spends and auto-posted installment periods alike, the latter tagged with their period number ("Notebook · 4/10"). Swiping between cycles moves through history; the current (open) cycle sits on top with its projected remainder in a lighter tone. "Reconcile to statement" (writes a `card_cycle_adjustments` row) and "pay bill" (pre-filled transfer) both live in the cycle header.
-* **Plan**: four sub-tabs — forward calendar (months × card/account, high months highlighted, projected recurring items shown in a lighter tone and labelled), budgets (green/amber/red bars), debt payoff (avalanche plus simulator), and **recurring rules** (list of rules with next occurrence date, amount, owner; toggle active; add/edit).
+* **Plan**: sub-tabs — **card bills** *(built, v3.1)*, **recurring rules** (list of rules with next occurrence date, amount, owner; toggle active; add/edit), **installments**, and later budgets (green/amber/red bars) and debt payoff (avalanche plus simulator).
+  * **Card bills (forward calendar)** *(v3.1)*: the in-app version of the sheet's per-card-per-cycle table (SPEC §5's most valuable output). Six months from the current one, **month-major** — each row is a month showing the combined bill across every card, expanding to the per-card breakdown (card name, cycle range, due date, amount). Month-major rather than a months × cards matrix so it scrolls vertically on a phone with no horizontal panning; the highest month is badged so a spike is visible without reading every number.
+  * A future cycle has no recorded transactions, so its figure is **committed charges only**: installment periods plus projected recurring charges. It is never a forecast of discretionary spending, and the tab says so under the list. A switch toggles the recurring projection off, to separate "what is contractually locked in" from "what the subscriptions add".
 * **Categories screen (Settings)** *(v3 — extends D10, added 2026-07-31)*: a dedicated settings screen, modelled on Money Manager's category manager, replacing the D10 inline-expand list. Income/Expense tabs at top. The list shows **main categories only**, each row: icon, name, an inline sub-count and preview ("Food(5) — Lunch, Dinner, Eating out…"), a **drag handle** for reordering (writes `sort_order`, replacing the D10 up/down-arrow buttons), an edit pencil, and a delete control. Tapping a row's name/icon area (not the drag handle) **drills down** into that main's own screen — same list chrome, header shows the main's name with its own edit pencil and an "add sub-category" `+`, body lists its subs with the same drag/edit/delete row shape. This replaces D10's inline expand-in-place with a real navigation stack, matching the reference app and keeping each screen's list short.
   * **Delete vs. archive**: the delete control checks first whether any transaction, recurring rule, or installment references the category (or, for a main, any of its subs). If none do, it **hard deletes** the row. If it's in use, delete instead **archives** it (existing D10 behaviour: a main's archive cascades to its subs) — a category with real financial history must never silently disappear out from under those records via a dangling FK or an orphaned reference; the choice of hard-delete-when-safe keeps the list from accumulating clutter from typos and abandoned experiments, which is the main reason a delete affordance was requested at all.
   * Reordering only ever swaps `sort_order` within the same level (mains among mains, a main's subs among each other) — it can't be used to re-parent a category; re-parenting (moving a sub under a different main) is not supported in v3.

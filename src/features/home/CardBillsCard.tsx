@@ -7,6 +7,7 @@ import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { useInstallmentPayments, useInstallments } from '@/lib/installments'
 import { dayMonthLabel } from '@/lib/month'
+import { useRecurringRules } from '@/lib/recurring'
 import { useTransactions } from '@/lib/transactions'
 
 interface Props {
@@ -24,6 +25,7 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
   const { data: installments } = useInstallments(householdId)
   const { data: payments } = useInstallmentPayments(householdId)
   const { data: adjustments } = useCardCycleAdjustments(householdId)
+  const { data: rules } = useRecurringRules(householdId)
 
   const activeCards = useMemo(() => (cards ?? []).filter((c) => !c.archived), [cards])
   const cycles = useMemo(
@@ -55,7 +57,15 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
         )
         const cardInstallments = (installments ?? []).filter((i) => i.card_id === card.id && i.status === 'active')
         const adjustment = (adjustments ?? []).find((a) => a.card_id === card.id && a.cycle_start === cycle.start)
-        const bill = cycleBill(cycle, card.id, cardTxns, cardInstallments, adjustment?.amount ?? null, paidPeriods)
+        const bill = cycleBill({
+          cycle,
+          cardId: card.id,
+          transactions: cardTxns,
+          installments: cardInstallments,
+          adjustment: adjustment?.amount ?? null,
+          paidPeriods,
+          recurringRules: rules ?? [],
+        })
         const paid = cardTxns
           .filter((t) => t.kind === 'transfer' && t.to_card_id === card.id && t.date >= cycle.start && t.date <= cycle.dueDate)
           .reduce((sum, t) => sum + t.amount, 0)
@@ -63,7 +73,7 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
       })
       .filter((row) => row.bill > 0)
       .sort((a, b) => (a.cycle.dueDate < b.cycle.dueDate ? -1 : 1))
-  }, [cycles, transactions, installments, adjustments, paidPeriods])
+  }, [cycles, transactions, installments, adjustments, paidPeriods, rules])
 
   if (rows.length === 0) return null
 
