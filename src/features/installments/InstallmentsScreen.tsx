@@ -77,24 +77,32 @@ export function InstallmentsScreen() {
                   style={{ width: `${Math.min(100, (paid / inst.total_periods) * 100)}%` }}
                 />
               </div>
-              {remaining > 0 && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  disabled={markPaid.isPending}
-                  onClick={() =>
-                    markPaid.mutate({
-                      installment: inst,
-                      periodNo: paid + 1,
-                      paidDate: today(),
-                      ownerId: inst.owner_id ?? self.id,
-                    })
-                  }
-                >
-                  Mark period {paid + 1} paid
-                </Button>
-              )}
+              {remaining > 0 &&
+                (inst.card_id ? (
+                  // D11: card-billed periods post themselves (InstallmentMaterialiser)
+                  // on their period date — the charge is on the statement whether or
+                  // not anyone taps anything, so there's nothing to mark here.
+                  <p className="text-center text-xs text-muted-foreground">
+                    Posts automatically · through period {paid}/{inst.total_periods}
+                  </p>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    disabled={markPaid.isPending}
+                    onClick={() =>
+                      markPaid.mutate({
+                        installment: inst,
+                        periodNo: paid + 1,
+                        paidDate: today(),
+                        ownerId: inst.owner_id ?? self.id,
+                      })
+                    }
+                  >
+                    Mark period {paid + 1} paid
+                  </Button>
+                ))}
             </li>
           )
         })}

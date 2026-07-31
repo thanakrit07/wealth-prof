@@ -8,6 +8,7 @@ import { HomeScreen } from '@/features/home/HomeScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
 import { AccountsScreen } from '@/features/accounts/AccountsScreen'
+import { InstallmentMaterialiser } from '@/features/installments/InstallmentMaterialiser'
 import { PlanScreen } from '@/features/plan/PlanScreen'
 import { RecurringMaterialiser } from '@/features/plan/RecurringMaterialiser'
 import { SettingsScreen } from '@/features/settings/SettingsScreen'
@@ -52,6 +53,7 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
   return (
     <HouseholdProvider self={self}>
       <RecurringMaterialiser />
+      <InstallmentMaterialiser />
       <AppShell
         month={month}
         onMonthChange={setMonth}

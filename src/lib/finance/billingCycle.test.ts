@@ -83,16 +83,28 @@ describe('periodDate', () => {
 
 describe('installmentChargeInCycle', () => {
   it('sums only the periods whose date falls inside the cycle', () => {
-    const installment = { start_date: '2026-01-15', total_periods: 12, monthly_amount: 1000, final_amount: null }
+    const installment = { id: 'inst-1', start_date: '2026-01-15', total_periods: 12, monthly_amount: 1000, final_amount: null }
     const cycle = { start: '2026-02-06', end: '2026-03-05', dueDate: '2026-03-20' }
     // Only period 2 (2026-02-15) falls in this cycle.
     expect(installmentChargeInCycle(installment, cycle)).toBe(1000)
   })
 
   it('uses final_amount for the last period', () => {
-    const installment = { start_date: '2026-01-15', total_periods: 2, monthly_amount: 1000, final_amount: 750 }
+    const installment = { id: 'inst-1', start_date: '2026-01-15', total_periods: 2, monthly_amount: 1000, final_amount: 750 }
     const cycle = { start: '2026-02-06', end: '2026-03-05', dueDate: '2026-03-20' }
     expect(installmentChargeInCycle(installment, cycle)).toBe(750)
+  })
+
+  it('excludes a period already posted as a real transaction (D11 double-count guard)', () => {
+    const installment = { id: 'inst-1', start_date: '2026-01-15', total_periods: 12, monthly_amount: 1000, final_amount: null }
+    const cycle = { start: '2026-02-06', end: '2026-03-05', dueDate: '2026-03-20' }
+    expect(installmentChargeInCycle(installment, cycle, new Set(['inst-1:2']))).toBe(0)
+  })
+
+  it('does not exclude another installment\'s period of the same number', () => {
+    const installment = { id: 'inst-1', start_date: '2026-01-15', total_periods: 12, monthly_amount: 1000, final_amount: null }
+    const cycle = { start: '2026-02-06', end: '2026-03-05', dueDate: '2026-03-20' }
+    expect(installmentChargeInCycle(installment, cycle, new Set(['inst-2:2']))).toBe(1000)
   })
 })
 
@@ -114,7 +126,7 @@ describe('cycleBill', () => {
   })
 
   it('adds installment charges falling in the cycle', () => {
-    const installments = [{ start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
+    const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
     expect(cycleBill(cycle, cardId, [], installments, null)).toBe(200)
   })
 
@@ -124,7 +136,15 @@ describe('cycleBill', () => {
 
   it('combines transactions, installments, and the adjustment', () => {
     const transactions = [{ amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null }]
-    const installments = [{ start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
+    const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
     expect(cycleBill(cycle, cardId, transactions, installments, 50)).toBe(750)
+  })
+
+  it('does not double-count a period already posted as a transaction (D11)', () => {
+    // The materialiser already turned period 1 into a real transaction on
+    // the card — it must appear in txnTotal only, not in both terms.
+    const transactions = [{ amount: 200, date: '2026-01-06', kind: 'expense' as const, to_card_id: null }]
+    const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
+    expect(cycleBill(cycle, cardId, transactions, installments, null, new Set(['inst-1:1']))).toBe(200)
   })
 })

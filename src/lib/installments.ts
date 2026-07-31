@@ -102,11 +102,12 @@ export function useDeleteInstallment(householdId: string) {
 }
 
 /**
- * Marks the next period paid (DESIGN §6.3): for account-billed
- * installments this always creates the paired transaction, so the
- * account balance can never drift from the payment history. Card-billed
- * installments don't create a transaction — they're already reflected in
- * the card's cycle bill via the installment schedule itself (§6.2).
+ * Marks the next period paid for an account-billed installment (DESIGN
+ * §6.3, §6.7): always creates the paired transaction, so the account
+ * balance can never drift from the payment history. Card-billed
+ * installments no longer go through this — InstallmentMaterialiser posts
+ * their periods automatically on the period date (§6.7 D11), since the
+ * charge lands on the real statement whether or not anyone taps anything.
  */
 export function useMarkPeriodPaid(householdId: string) {
   const queryClient = useQueryClient()
@@ -122,39 +123,34 @@ export function useMarkPeriodPaid(householdId: string) {
       paidDate: string
       ownerId: string | null
     }) => {
-      let transactionId: string | null = null
-
-      if (installment.account_id) {
-        const amount =
-          periodNo === installment.total_periods && installment.final_amount != null
-            ? installment.final_amount
-            : installment.monthly_amount
-        const { data: txn, error: txnError } = await supabase
-          .from('transactions')
-          .insert({
-            household_id: householdId,
-            date: paidDate,
-            kind: 'expense',
-            category_id: installment.category_id,
-            category_kind: installment.category_id ? 'expense' : null,
-            description: `${installment.name} (${periodNo}/${installment.total_periods})`,
-            amount,
-            owner_id: ownerId,
-            from_account_id: installment.account_id,
-            source: 'installment',
-          })
-          .select('id')
-          .single()
-        if (txnError) throw txnError
-        transactionId = txn.id as string
-      }
+      const amount =
+        periodNo === installment.total_periods && installment.final_amount != null
+          ? installment.final_amount
+          : installment.monthly_amount
+      const { data: txn, error: txnError } = await supabase
+        .from('transactions')
+        .insert({
+          household_id: householdId,
+          date: paidDate,
+          kind: 'expense',
+          category_id: installment.category_id,
+          category_kind: installment.category_id ? 'expense' : null,
+          description: `${installment.name} (${periodNo}/${installment.total_periods})`,
+          amount,
+          owner_id: ownerId,
+          from_account_id: installment.account_id,
+          source: 'installment',
+        })
+        .select('id')
+        .single()
+      if (txnError) throw txnError
 
       const { error } = await supabase.from('installment_payments').insert({
         household_id: householdId,
         installment_id: installment.id,
         period_no: periodNo,
         paid_date: paidDate,
-        transaction_id: transactionId,
+        transaction_id: txn.id,
       })
       if (error) throw error
 

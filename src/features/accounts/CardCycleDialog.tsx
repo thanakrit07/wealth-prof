@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { CategoryIcon } from '@/lib/categoryIcons'
+import { useCategories } from '@/lib/categories'
 import { useSetCardCycleAdjustment, useCardCycleAdjustments } from '@/lib/cardCycleAdjustments'
-import { cycleBill, cycleOf } from '@/lib/finance/billingCycle'
+import { addDays, cycleBill, cycleOf } from '@/lib/finance/billingCycle'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
-import { useInstallments } from '@/lib/installments'
+import { useInstallmentPayments, useInstallments } from '@/lib/installments'
 import { useTransactions } from '@/lib/transactions'
 import type { Card } from '@/lib/cards'
 
@@ -20,11 +23,23 @@ interface Props {
   onClose: () => void
 }
 
+// Card statement view (DESIGN.md §7.3, D11): transactions grouped by
+// billing cycle, newest first — the in-app version of the old sheet's
+// per-cycle summary. Auto-posted installment periods (InstallmentMaterialiser)
+// sit in the same list as manual spends, tagged by their own description
+// ("Notebook (4/10)"), so the list reads like the issuer's statement.
 export function CardCycleDialog({ card, onClose }: Props) {
   const { householdId } = useHousehold()
-  const cycle = useMemo(() => cycleOf(card, today()), [card])
+  // The date used to compute the visible cycle — navigated a day at a time
+  // past the cycle boundary so cycleOf() lands in the next/previous cycle.
+  const [anchorDate, setAnchorDate] = useState(today())
+  const cycle = useMemo(() => cycleOf(card, anchorDate), [card, anchorDate])
+  const isCurrentCycle = cycleOf(card, today()).start === cycle.start
+
   const { data: transactions } = useTransactions(householdId, { start: cycle.start, end: cycle.end })
   const { data: installments } = useInstallments(householdId)
+  const { data: payments } = useInstallmentPayments(householdId)
+  const { data: categories } = useCategories(householdId)
   const { data: adjustments } = useCardCycleAdjustments(householdId)
   const setAdjustment = useSetCardCycleAdjustment(householdId)
 
@@ -33,13 +48,23 @@ export function CardCycleDialog({ card, onClose }: Props) {
   const [adjustmentAmount, setAdjustmentAmount] = useState(String(existingAdjustment?.amount ?? '0'))
   const [adjustmentNote, setAdjustmentNote] = useState(existingAdjustment?.note ?? '')
 
-  const cardTransactions = (transactions ?? []).filter(
-    (t) => t.from_card_id === card.id || t.to_card_id === card.id,
-  )
+  const cardTransactions = (transactions ?? [])
+    .filter((t) => t.from_card_id === card.id || t.to_card_id === card.id)
+    .filter((t) => t.confirmed)
   const cardInstallments = (installments ?? []).filter((i) => i.card_id === card.id && i.status === 'active')
+  const paidPeriods = new Set((payments ?? []).map((p) => `${p.installment_id}:${p.period_no}`))
 
-  const bill = cycleBill(cycle, card.id, cardTransactions, cardInstallments, existingAdjustment?.amount ?? null)
+  const bill = cycleBill(cycle, card.id, cardTransactions, cardInstallments, existingAdjustment?.amount ?? null, paidPeriods)
+  const paidSoFar = cardTransactions
+    .filter((t) => t.kind === 'transfer' && t.to_card_id === card.id)
+    .reduce((sum, t) => sum + t.amount, 0)
   const utilization = card.credit_limit > 0 ? Math.min(100, (bill / card.credit_limit) * 100) : 0
+
+  const categoryById = new Map((categories ?? []).map((c) => [c.id, c]))
+  const chargeRows = cardTransactions
+    .filter((t) => !(t.kind === 'transfer' && t.to_card_id === card.id))
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  const paymentRows = cardTransactions.filter((t) => t.kind === 'transfer' && t.to_card_id === card.id)
 
   async function saveAdjustment() {
     await setAdjustment.mutateAsync({
@@ -51,18 +76,37 @@ export function CardCycleDialog({ card, onClose }: Props) {
     setEditingAdjustment(false)
   }
 
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{card.name}</DialogTitle>
-        </DialogHeader>
+  function goToCycle(delta: 1 | -1) {
+    setAnchorDate(delta === 1 ? addDays(cycle.end, 1) : addDays(cycle.start, -1))
+    setEditingAdjustment(false)
+  }
 
-        <div className="space-y-4">
+  return (
+    <Drawer open onOpenChange={(open) => !open && onClose()}>
+      <DrawerContent>
+        <DrawerHeader>
+          <DrawerTitle>{card.name}</DrawerTitle>
+        </DrawerHeader>
+
+        <div className="space-y-4 px-4 pb-4">
           <div className="rounded-xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 p-3 text-center">
-            <p className="text-xs text-muted-foreground">Current cycle ({cycle.start} – {cycle.end})</p>
+            <div className="flex items-center justify-between">
+              <Button variant="ghost" size="icon" className="size-7" onClick={() => goToCycle(-1)} aria-label="Previous cycle">
+                <ChevronLeft className="size-4" />
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                {cycle.start} – {cycle.end}
+                {isCurrentCycle && ' · current'}
+              </p>
+              <Button variant="ghost" size="icon" className="size-7" onClick={() => goToCycle(1)} aria-label="Next cycle">
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
             <p className="mt-1 text-2xl font-semibold">{formatBaht(bill)}</p>
-            <p className="text-xs text-muted-foreground">Due {cycle.dueDate}</p>
+            <p className="text-xs text-muted-foreground">
+              Due {cycle.dueDate}
+              {paidSoFar > 0 && ` · ${formatBaht(paidSoFar)} paid`}
+            </p>
           </div>
 
           <div className="space-y-1">
@@ -78,14 +122,32 @@ export function CardCycleDialog({ card, onClose }: Props) {
             </div>
           </div>
 
-          <div className="space-y-1 text-sm">
-            <p className="text-muted-foreground">
-              Card transactions this cycle: {formatBaht(cardTransactions.filter((t) => t.date >= cycle.start && t.date <= cycle.end && !(t.kind === 'transfer' && t.to_card_id === card.id)).reduce((s, t) => s + t.amount, 0))}
-            </p>
-            {cardInstallments.length > 0 && (
-              <p className="text-muted-foreground">Installment plans billed here: {cardInstallments.length}</p>
-            )}
-          </div>
+          <ul className="space-y-1">
+            {chargeRows.map((t) => (
+              <li key={t.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                <CategoryIcon icon={categoryById.get(t.category_id ?? '')?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{t.description || categoryById.get(t.category_id ?? '')?.name || t.kind}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{t.date}</span>
+                <span className="shrink-0 font-medium">{formatBaht(t.amount)}</span>
+              </li>
+            ))}
+            {chargeRows.length === 0 && <p className="text-sm text-muted-foreground">No charges this cycle.</p>}
+          </ul>
+
+          {paymentRows.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Payments</p>
+              <ul className="space-y-1">
+                {paymentRows.map((t) => (
+                  <li key={t.id} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate">Bill payment</span>
+                    <span className="shrink-0 text-xs">{t.date}</span>
+                    <span className="shrink-0 font-medium">{formatBaht(t.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {!editingAdjustment ? (
             <button
@@ -117,11 +179,7 @@ export function CardCycleDialog({ card, onClose }: Props) {
             </div>
           )}
         </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </DrawerContent>
+    </Drawer>
   )
 }

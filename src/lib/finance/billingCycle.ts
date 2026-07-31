@@ -64,10 +64,15 @@ export function cycleOf(card: CardLike, date: string): Cycle {
   return { start, end, dueDate }
 }
 
-function addOneDay(date: string): string {
+/** Shifts a date by `delta` days (negative goes backward). */
+export function addDays(date: string, delta: number): string {
   const { year, month0, day } = parts(date)
-  const d = new Date(year, month0, day + 1)
+  const d = new Date(year, month0, day + delta)
   return iso(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
+function addOneDay(date: string): string {
+  return addDays(date, 1)
 }
 
 /**
@@ -82,16 +87,29 @@ export function periodDate(startDate: string, periodNo: number): string {
 }
 
 export interface InstallmentLike {
+  id: string
   start_date: string
   total_periods: number
   monthly_amount: number
   final_amount: number | null
 }
 
-/** Total installment charge falling inside [cycle.start, cycle.end]. */
-export function installmentChargeInCycle(installment: InstallmentLike, cycle: Cycle): number {
+/**
+ * Total installment charge falling inside [cycle.start, cycle.end].
+ *
+ * `paidPeriods` (keys "<installmentId>:<periodNo>") excludes periods that
+ * already exist as real transactions (DESIGN §6.7 D11) — once
+ * InstallmentMaterialiser posts a period, it's already inside the caller's
+ * transaction total, so counting it here too would double it.
+ */
+export function installmentChargeInCycle(
+  installment: InstallmentLike,
+  cycle: Cycle,
+  paidPeriods: ReadonlySet<string> = new Set(),
+): number {
   let total = 0
   for (let n = 1; n <= installment.total_periods; n++) {
+    if (paidPeriods.has(`${installment.id}:${n}`)) continue
     const date = periodDate(installment.start_date, n)
     if (date >= cycle.start && date <= cycle.end) {
       total += n === installment.total_periods && installment.final_amount != null
@@ -122,13 +140,17 @@ export function cycleBill(
   transactionsOnCard: TransactionChargeLike[],
   installmentsOnCard: InstallmentLike[],
   adjustment: number | null,
+  paidPeriods: ReadonlySet<string> = new Set(),
 ): number {
   const txnTotal = transactionsOnCard
     .filter((t) => t.date >= cycle.start && t.date <= cycle.end)
     .filter((t) => !(t.kind === 'transfer' && t.to_card_id === cardId))
     .reduce((sum, t) => sum + t.amount, 0)
 
-  const installmentTotal = installmentsOnCard.reduce((sum, inst) => sum + installmentChargeInCycle(inst, cycle), 0)
+  const installmentTotal = installmentsOnCard.reduce(
+    (sum, inst) => sum + installmentChargeInCycle(inst, cycle, paidPeriods),
+    0,
+  )
 
   return txnTotal + installmentTotal + (adjustment ?? 0)
 }
