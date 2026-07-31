@@ -79,9 +79,39 @@ export function useUpdateCategory(householdId: string) {
   })
 }
 
-export async function swapCategorySortOrder(a: Category, b: Category) {
-  await Promise.all([
-    supabase.from('categories').update({ sort_order: b.sort_order }).eq('id', a.id),
-    supabase.from('categories').update({ sort_order: a.sort_order }).eq('id', b.id),
-  ])
+// Persists a full reordering of one sibling group (mains, or one main's
+// subs) after a drag — writes each row's new sort_order.
+export function useReorderCategories(householdId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (ordered: Category[]) => {
+      await Promise.all(
+        ordered.map((c, i) => supabase.from('categories').update({ sort_order: i }).eq('id', c.id)),
+      )
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories', householdId] }),
+  })
+}
+
+// Hard-deletes an unused category; falls back to archiving (which cascades
+// to subs, D10) if it's referenced by any transaction/rule/installment/
+// budget, or has sub-categories of its own — relies on the FK RESTRICT
+// Postgres already enforces on every category_id/parent_id reference, so
+// there's one source of truth for "in use," not four separate count queries.
+export function useDeleteCategory(householdId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (category: Category): Promise<'deleted' | 'archived'> => {
+      const { error } = await supabase.from('categories').delete().eq('id', category.id)
+      if (!error) return 'deleted'
+      if (error.code !== '23503') throw error
+      const { error: archiveError } = await supabase
+        .from('categories')
+        .update({ archived: true })
+        .eq('id', category.id)
+      if (archiveError) throw archiveError
+      return 'archived'
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['categories', householdId] }),
+  })
 }
