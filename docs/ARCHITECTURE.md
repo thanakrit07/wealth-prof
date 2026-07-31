@@ -96,3 +96,10 @@ or bump a change and reload twice.
 - The React Query cache persists to localStorage for 7 days (offline reads).
   Sign-out clears it — if you add another storage location for financial
   data, clear it there too.
+- **Anything a `queryFn` returns must survive a JSON round-trip**, because
+  that cache is persisted as JSON. A `Map` or `Set` stringifies to `{}`: the
+  entries vanish and the rehydrated value has no `.get`, so the crash only
+  appears after a reload, not while developing. If a screen wants a Map, keep
+  the query data plain and build it in React Query's `select` (see
+  `src/lib/categoryUsage.ts`) — `select` output is never persisted. Same goes
+  for `Date` objects and class instances.
