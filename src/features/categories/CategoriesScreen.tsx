@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CATEGORY_ICONS, CategoryIcon } from '@/lib/categoryIcons'
@@ -22,6 +21,7 @@ import {
   type CategoryKind,
 } from '@/lib/categories'
 import { useHousehold } from '@/lib/HouseholdContext'
+import { cn } from '@/lib/utils'
 
 const ICON_KEYS = Object.keys(CATEGORY_ICONS)
 
@@ -209,6 +209,63 @@ function CategoryRow({
   )
 }
 
+// Icon names ("utensils-crossed") mean nothing to the person picking one, so
+// the grid is icon-only; the Emoji tab lets any emoji be a custom icon
+// (DESIGN.md §4.2 v3.1) using the phone's own emoji keyboard.
+function IconPicker({ value, onChange }: { value: string; onChange: (icon: string) => void }) {
+  const isEmoji = !(value in CATEGORY_ICONS)
+  const [mode, setMode] = useState<'icon' | 'emoji'>(isEmoji ? 'emoji' : 'icon')
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label>Icon</Label>
+        <Tabs value={mode} onValueChange={(v) => setMode(v as 'icon' | 'emoji')}>
+          <TabsList className="h-8">
+            <TabsTrigger value="icon" className="text-xs">
+              Icons
+            </TabsTrigger>
+            <TabsTrigger value="emoji" className="text-xs">
+              Emoji
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {mode === 'icon' ? (
+        <div className="grid max-h-44 grid-cols-7 gap-1.5 overflow-y-auto rounded-lg border p-2">
+          {ICON_KEYS.map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onChange(key)}
+              aria-label={key}
+              className={cn(
+                'flex aspect-square items-center justify-center rounded-lg border transition-colors active:scale-95',
+                value === key ? 'border-primary bg-primary/10' : 'border-transparent hover:bg-accent',
+              )}
+            >
+              <CategoryIcon icon={key} className="size-5" />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 rounded-lg border p-3">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted">
+            <CategoryIcon icon={isEmoji ? value : null} className="size-6" />
+          </span>
+          <Input
+            value={isEmoji ? value : ''}
+            onChange={(e) => onChange([...e.target.value.trim()].slice(0, 4).join(''))}
+            placeholder="Type or paste an emoji 🍜"
+            aria-label="Emoji icon"
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CategoryDialog({
   kind,
   category,
@@ -253,24 +310,7 @@ function CategoryDialog({
             <Label htmlFor="category-name">Name</Label>
             <Input id="category-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
-          <div className="space-y-1.5">
-            <Label>Icon</Label>
-            <Select value={icon} onValueChange={setIcon}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ICON_KEYS.map((key) => (
-                  <SelectItem key={key} value={key}>
-                    <span className="flex items-center gap-2">
-                      <CategoryIcon icon={key} className="size-4" />
-                      {key}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <IconPicker value={icon} onChange={setIcon} />
           {category && (
             <div className="flex items-center justify-between">
               <div>
