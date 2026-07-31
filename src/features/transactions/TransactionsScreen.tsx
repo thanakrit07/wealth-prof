@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRightLeft, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { SwipeableRow } from '@/components/SwipeableRow'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { effectiveMainId, useCategories } from '@/lib/categories'
 import { useAccounts } from '@/lib/accounts'
@@ -7,8 +10,9 @@ import { useCards } from '@/lib/cards'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
-import { monthRange } from '@/lib/month'
-import { useTransactions, type Transaction } from '@/lib/transactions'
+import { dayMonthLabel, monthRange } from '@/lib/month'
+import { supabase } from '@/lib/supabase'
+import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { ReviewStrip } from './ReviewStrip'
 import { TransactionSheet } from './TransactionSheet'
 
@@ -27,6 +31,23 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   const { data: accounts } = useAccounts(householdId)
   const { data: cards } = useCards(householdId)
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const remove = useDeleteTransaction(householdId)
+  const queryClient = useQueryClient()
+
+  // Soft delete with undo, same contract as saving from the sheet: the row
+  // only sets deleted_at, so restoring is a matching update.
+  async function handleDelete(t: Transaction) {
+    await remove.mutateAsync(t.id)
+    toast.success('Transaction deleted', {
+      action: {
+        label: 'Undo',
+        onClick: async () => {
+          await supabase.from('transactions').update({ deleted_at: null }).eq('id', t.id)
+          queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
+        },
+      },
+    })
+  }
 
   const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
   const instrumentName = useMemo(() => {
@@ -83,53 +104,55 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
       <div className="space-y-4">
         {groups.map(([date, items]) => (
           <div key={date}>
-            <h3 className="mb-1 text-xs font-medium text-muted-foreground">{date}</h3>
+            <h3 className="mb-1 text-xs font-medium text-muted-foreground">{dayMonthLabel(date)}</h3>
             <ul className="space-y-1">
               {items.map((t) => {
                 const category = t.category_id ? categoryById.get(t.category_id) : null
                 const owner = t.owner_id ? memberById.get(t.owner_id) : null
                 return (
                   <li key={t.id}>
-                    <button
-                      onClick={() => setEditing(t)}
-                      className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:bg-accent"
-                    >
-                      {t.kind === 'transfer' ? (
-                        <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
-                      ) : (
-                        <CategoryIcon icon={category?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="flex items-center gap-1.5 truncate">
-                          <span className="truncate">
-                            {t.kind === 'transfer'
-                              ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
-                              : t.description || category?.name || t.kind}
-                          </span>
-                          {!t.confirmed && (
-                            <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                              Pending
-                            </span>
-                          )}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {instrumentLabel(t, 'from')}
-                          {owner && ` · ${owner.display_name}`}
-                        </p>
-                      </div>
-                      <span
-                        className={
-                          t.kind === 'income'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : t.kind === 'transfer'
-                              ? 'text-muted-foreground'
-                              : 'text-foreground'
-                        }
+                    <SwipeableRow onDelete={() => handleDelete(t)}>
+                      <button
+                        onClick={() => setEditing(t)}
+                        className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:bg-accent"
                       >
-                        {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
-                        {formatBaht(t.amount)}
-                      </span>
-                    </button>
+                        {t.kind === 'transfer' ? (
+                          <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <CategoryIcon icon={category?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="flex items-center gap-1.5 truncate">
+                            <span className="truncate">
+                              {t.kind === 'transfer'
+                                ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
+                                : t.description || category?.name || t.kind}
+                            </span>
+                            {!t.confirmed && (
+                              <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                                Pending
+                              </span>
+                            )}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {instrumentLabel(t, 'from')}
+                            {owner && ` · ${owner.display_name}`}
+                          </p>
+                        </div>
+                        <span
+                          className={
+                            t.kind === 'income'
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : t.kind === 'transfer'
+                                ? 'text-muted-foreground'
+                                : 'text-foreground'
+                          }
+                        >
+                          {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
+                          {formatBaht(t.amount)}
+                        </span>
+                      </button>
+                    </SwipeableRow>
                   </li>
                 )
               })}

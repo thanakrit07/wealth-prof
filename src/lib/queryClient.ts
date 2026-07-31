@@ -20,3 +20,14 @@ export const queryPersister = createSyncStoragePersister({
   key: 'wealth-prof-query-cache',
   throttleTime: 2_000,
 })
+
+/**
+ * Wipes the persisted cache and everything in memory (DESIGN.md §8: the
+ * device holds the household's full financial history in plaintext, so
+ * logging out has to clear it). Call before signing out — after signOut()
+ * the persister could otherwise flush in-memory data back to localStorage.
+ */
+export async function clearPersistedCache() {
+  await queryPersister.removeClient()
+  queryClient.clear()
+}
