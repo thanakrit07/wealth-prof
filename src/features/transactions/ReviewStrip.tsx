@@ -35,7 +35,7 @@ export function ReviewStrip({ onEdit }: Props) {
               size="icon"
               variant="outline"
               className="size-8 shrink-0 border-amber-400/60 text-amber-700 hover:bg-amber-100 dark:text-amber-400"
-              onClick={() => confirm.mutate(t.id)}
+              onClick={() => confirm.mutate(t)}
               disabled={confirm.isPending}
               aria-label={`Confirm ${t.description}`}
             >

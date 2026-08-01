@@ -10,8 +10,8 @@ function todayIso(): string {
 
 const MIN_INTERVAL_MS = 5 * 60_000
 
-// Posts card-billed installment periods on app open and on regaining focus
-// (DESIGN §6.7 — mirrors RecurringMaterialiser). Renders nothing.
+// Posts due installment periods on app open and on regaining focus (DESIGN
+// §6.7/§4.5 — mirrors RecurringMaterialiser). Renders nothing.
 export function InstallmentMaterialiser() {
   const { householdId } = useHousehold()
   const { data: installments } = useInstallments(householdId)

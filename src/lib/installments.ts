@@ -135,11 +135,16 @@ export function useMarkPeriodPaid(householdId: string) {
           kind: 'expense',
           category_id: installment.category_id,
           category_kind: installment.category_id ? 'expense' : null,
-          description: `${installment.name} (${periodNo}/${installment.total_periods})`,
+          description: `${installment.name} (งวดที่ ${periodNo}/${installment.total_periods})`,
           amount,
           owner_id: ownerId,
           from_account_id: installment.account_id,
           source: 'installment',
+          // Same key format as the materialiser (installmentMaterialiser.ts)
+          // so an early manual payment here is recognised as "already
+          // posted" and the materialiser doesn't try to post it again once
+          // the period's due date arrives.
+          source_key: `installment:${installment.id}:${periodNo}`,
         })
         .select('id')
         .single()
