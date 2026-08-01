@@ -13,6 +13,11 @@ export function InstallmentMaterialiser() {
   const { data: installments } = useInstallments(householdId)
   const queryClient = useQueryClient()
   const running = useRef(false)
+  // Set when a run is requested while one is already in flight. Dropping that
+  // request instead of queueing it is how a plan created moments after a big
+  // catch-up batch ended up with no periods at all: the only thing that would
+  // have retried was a focus event that may never come.
+  const rerunRequested = useRef(false)
   const installmentsRef = useRef(installments)
   installmentsRef.current = installments
 
@@ -25,22 +30,32 @@ export function InstallmentMaterialiser() {
 
   useEffect(() => {
     async function run() {
-      const current = installmentsRef.current
-      if (!current || current.length === 0) return
-      if (running.current) return
+      if (running.current) {
+        rerunRequested.current = true
+        return
+      }
       running.current = true
       try {
-        const posted = await materialiseInstallmentsDue(householdId, current)
-        if (posted > 0) {
-          queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
-          queryClient.invalidateQueries({ queryKey: ['installments', householdId] })
-          queryClient.invalidateQueries({ queryKey: ['installment_payments', householdId] })
-        }
+        do {
+          rerunRequested.current = false
+          const current = installmentsRef.current
+          if (!current || current.length === 0) return
+          const posted = await materialiseInstallmentsDue(householdId, current)
+          if (posted > 0) {
+            queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
+            queryClient.invalidateQueries({ queryKey: ['installment_posted_periods', householdId] })
+            queryClient.invalidateQueries({ queryKey: ['installments', householdId] })
+            queryClient.invalidateQueries({ queryKey: ['installment_payments', householdId] })
+          }
+          // Re-reads installmentsRef, so a plan added mid-run is picked up by
+          // this same pass rather than waiting for a focus event.
+        } while (rerunRequested.current)
       } catch (error) {
         // Non-fatal: the next open/focus retries the same unposted periods.
         console.error('Installment materialisation failed', error)
       } finally {
         running.current = false
+        rerunRequested.current = false
       }
     }
 

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { parsePeriodSourceKey } from './installmentMaterialiser'
+import { parsePeriodSourceKey, periodSourceKey } from './installmentMaterialiser'
 import { supabase } from './supabase'
 
 export type InstallmentStatus = 'active' | 'done' | 'cancelled'
@@ -175,12 +175,28 @@ export function useSetPeriodPaid(householdId: string) {
       paid: boolean
     }) => {
       if (paid) {
+        // The caller's id comes from a client-side map that can legitimately
+        // be empty — the period's charge may not have been posted yet when
+        // the box is ticked. Resolve it here rather than storing null, or the
+        // payment loses the link that §4.5 calls the source of truth for
+        // whether the money actually moved.
+        let linkedTransactionId = transactionId
+        if (!linkedTransactionId) {
+          const { data } = await supabase
+            .from('v_transactions')
+            .select('id')
+            .eq('household_id', householdId)
+            .eq('source_key', periodSourceKey(installmentId, periodNo))
+            .maybeSingle()
+          linkedTransactionId = data?.id ?? null
+        }
+
         const { error } = await supabase.from('installment_payments').insert({
           household_id: householdId,
           installment_id: installmentId,
           period_no: periodNo,
           paid_date: paidDate,
-          transaction_id: transactionId,
+          transaction_id: linkedTransactionId,
         })
         if (error && error.code !== UNIQUE_VIOLATION) throw error
       } else {
