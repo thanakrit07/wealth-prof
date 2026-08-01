@@ -19,6 +19,15 @@ export function dayMonthLabel(date: string): string {
   return format(parse(date, 'yyyy-MM-dd', new Date()), 'd MMM')
 }
 
+// "20" and "Mon" — the two halves of a day-group header in the ledger.
+export function dayOfMonthLabel(date: string): string {
+  return format(parse(date, 'yyyy-MM-dd', new Date()), 'd')
+}
+
+export function weekdayLabel(date: string): string {
+  return format(parse(date, 'yyyy-MM-dd', new Date()), 'EEE')
+}
+
 // Inclusive [start, end] plain-date range for the month, for querying
 // transactions.date (DESIGN.md §4.3 — dates are always Asia/Bangkok).
 export function monthRange(monthKey: string): { start: string; end: string } {

@@ -10,9 +10,10 @@ import { useCards } from '@/lib/cards'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
-import { dayMonthLabel, monthRange } from '@/lib/month'
+import { dayOfMonthLabel, monthRange, weekdayLabel } from '@/lib/month'
 import { supabase } from '@/lib/supabase'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
+import { cn } from '@/lib/utils'
 import { ReviewStrip } from './ReviewStrip'
 import { TransactionSheet } from './TransactionSheet'
 
@@ -101,64 +102,85 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
         </button>
       )}
       {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this month.</p>}
-      <div className="space-y-4">
-        {groups.map(([date, items]) => (
-          <div key={date}>
-            <h3 className="mb-1 text-xs font-medium text-muted-foreground">{dayMonthLabel(date)}</h3>
-            <ul className="space-y-1">
-              {items.map((t) => {
-                const category = t.category_id ? categoryById.get(t.category_id) : null
-                const owner = t.owner_id ? memberById.get(t.owner_id) : null
-                return (
-                  <li key={t.id}>
-                    <SwipeableRow onDelete={() => handleDelete(t)}>
-                      <button
-                        onClick={() => setEditing(t)}
-                        className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:bg-accent"
-                      >
-                        {t.kind === 'transfer' ? (
-                          <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <CategoryIcon icon={category?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <p className="flex items-center gap-1.5 truncate">
-                            <span className="truncate">
-                              {t.kind === 'transfer'
-                                ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
-                                : t.description || category?.name || t.kind}
-                            </span>
-                            {!t.confirmed && (
-                              <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                                Pending
-                              </span>
-                            )}
-                          </p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {instrumentLabel(t, 'from')}
-                            {owner && ` · ${owner.display_name}`}
-                          </p>
-                        </div>
-                        <span
-                          className={
-                            t.kind === 'income'
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : t.kind === 'transfer'
-                                ? 'text-muted-foreground'
-                                : 'text-foreground'
-                          }
+      {/* One continuous ledger rather than a card per row (Money Manager
+          density): day headers carry that day's totals, and hairline
+          dividers replace the per-row borders and gaps. */}
+      <div className="overflow-hidden rounded-xl border bg-card">
+        {groups.map(([date, items], groupIndex) => {
+          const dayIncome = items.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0)
+          const dayExpense = items.filter((t) => t.kind === 'expense').reduce((s, t) => s + t.amount, 0)
+          return (
+            <div key={date} className={groupIndex > 0 ? 'border-t' : undefined}>
+              <div className="flex items-center gap-2 bg-muted/50 px-3 py-1">
+                <span className="text-sm font-semibold tabular-nums">{dayOfMonthLabel(date)}</span>
+                <span className="rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground">
+                  {weekdayLabel(date)}
+                </span>
+                <span className="ml-auto flex items-center gap-3 text-[11px] tabular-nums">
+                  {dayIncome > 0 && (
+                    <span className="text-emerald-600 dark:text-emerald-400">{formatBaht(dayIncome)}</span>
+                  )}
+                  {dayExpense > 0 && <span className="text-muted-foreground">{formatBaht(dayExpense)}</span>}
+                </span>
+              </div>
+
+              <ul>
+                {items.map((t) => {
+                  const category = t.category_id ? categoryById.get(t.category_id) : null
+                  const owner = t.owner_id ? memberById.get(t.owner_id) : null
+                  const title =
+                    t.kind === 'transfer'
+                      ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
+                      : t.description || category?.name || t.kind
+                  // Category only repeats below when it isn't already the title.
+                  const details = [category?.name === title ? null : category?.name, instrumentLabel(t, 'from'), owner?.display_name]
+                    .filter(Boolean)
+                    .join(' · ')
+                  return (
+                    <li key={t.id} className="border-t">
+                      <SwipeableRow onDelete={() => handleDelete(t)}>
+                        <button
+                          onClick={() => setEditing(t)}
+                          className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition-colors active:bg-accent/60"
                         >
-                          {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
-                          {formatBaht(t.amount)}
-                        </span>
-                      </button>
-                    </SwipeableRow>
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
-        ))}
+                          {t.kind === 'transfer' ? (
+                            <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <CategoryIcon icon={category?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-1.5">
+                              <span className="truncate text-sm">{title}</span>
+                              {!t.confirmed && (
+                                <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                                  Pending
+                                </span>
+                              )}
+                            </span>
+                            {details && <span className="block truncate text-[11px] text-muted-foreground">{details}</span>}
+                          </span>
+                          <span
+                            className={cn(
+                              'shrink-0 text-sm tabular-nums',
+                              t.kind === 'income'
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : t.kind === 'transfer'
+                                  ? 'text-muted-foreground'
+                                  : 'text-foreground',
+                            )}
+                          >
+                            {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
+                            {formatBaht(t.amount)}
+                          </span>
+                        </button>
+                      </SwipeableRow>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )
+        })}
       </div>
 
       {editing && <TransactionSheet open onOpenChange={(open) => !open && setEditing(null)} transaction={editing} />}

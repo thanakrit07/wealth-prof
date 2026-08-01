@@ -58,7 +58,7 @@ export function SwipeableRow({ onDelete, children }: Props) {
   }
 
   return (
-    <div className="relative overflow-hidden rounded-lg">
+    <div className="relative overflow-hidden">
       <button
         type="button"
         onClick={() => {
@@ -79,7 +79,9 @@ export function SwipeableRow({ onDelete, children }: Props) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        className="relative touch-pan-y bg-background"
+        // Opaque, and matching the list it sits in, so the delete button
+        // behind it never shows through while sliding.
+        className="relative touch-pan-y bg-card"
         style={{
           transform: `translateX(${offset}px)`,
           transition: dragging ? undefined : 'transform 150ms ease-out',
