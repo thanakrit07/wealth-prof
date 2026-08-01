@@ -9,10 +9,27 @@ export interface Category {
   name: string
   kind: CategoryKind
   icon: string | null
+  /** Hex string, or null for the default neutral icon colour. */
+  color: string | null
   sort_order: number
   archived: boolean
   parent_id: string | null
 }
+
+// Icon colours offered in the picker. Mid-range tones so they stay legible
+// on both the light and dark surfaces (DESIGN.md §7.4).
+export const CATEGORY_COLORS = [
+  '#ef4444',
+  '#f97316',
+  '#f59e0b',
+  '#84cc16',
+  '#10b981',
+  '#14b8a6',
+  '#0ea5e9',
+  '#6366f1',
+  '#a855f7',
+  '#ec4899',
+] as const
 
 export function useCategories(householdId: string) {
   return useQuery({
@@ -20,7 +37,7 @@ export function useCategories(householdId: string) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('v_categories')
-        .select('id, household_id, name, kind, icon, sort_order, archived, parent_id')
+        .select('id, household_id, name, kind, icon, color, sort_order, archived, parent_id')
         .eq('household_id', householdId)
         .order('kind')
         .order('sort_order')
@@ -43,6 +60,7 @@ export function useCreateCategory(householdId: string) {
       name: string
       kind: CategoryKind
       icon: string | null
+      color: string | null
       sortOrder: number
       parentId?: string | null
     }) => {
@@ -51,6 +69,7 @@ export function useCreateCategory(householdId: string) {
         name: input.name,
         kind: input.kind,
         icon: input.icon,
+        color: input.color,
         sort_order: input.sortOrder,
         parent_id: input.parentId ?? null,
       })
@@ -67,6 +86,7 @@ export function useUpdateCategory(householdId: string) {
       id: string
       name?: string
       icon?: string | null
+      color?: string | null
       archived?: boolean
       sort_order?: number
       parent_id?: string | null

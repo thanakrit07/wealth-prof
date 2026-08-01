@@ -86,13 +86,13 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     if (current?.parent_id) setExpandedMainId(current.parent_id)
   }, [categories, transaction?.category_id])
 
-  const byUsageThenOrder = (a: Category, b: Category) => {
-    const byUsage = (usage?.counts.get(b.id) ?? 0) - (usage?.counts.get(a.id) ?? 0)
-    return byUsage !== 0 ? byUsage : a.sort_order - b.sort_order
-  }
+  // Ordered by the arrangement set in Manage categories, not by usage
+  // frequency: the drag order is an explicit choice, and letting counts
+  // reshuffle the grid moves tiles out from under the user's muscle memory.
+  const bySortOrder = (a: Category, b: Category) => a.sort_order - b.sort_order
   const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
-  const mainCategories = relevantCategories.filter((c) => c.parent_id === null).sort(byUsageThenOrder)
-  const subsOf = (parentId: string) => relevantCategories.filter((c) => c.parent_id === parentId).sort(byUsageThenOrder)
+  const mainCategories = relevantCategories.filter((c) => c.parent_id === null).sort(bySortOrder)
+  const subsOf = (parentId: string) => relevantCategories.filter((c) => c.parent_id === parentId).sort(bySortOrder)
 
   // With 8 or fewer categories everything fits in 2 rows anyway, so the
   // More tile would only add a row. The selected category's main must
@@ -220,20 +220,23 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
                   return (
                     <button
                       key={c.id}
+                      // Selecting the main is always enough to save; the subs
+                      // just open alongside as an optional refinement, so a
+                      // main with children is never a dead end.
                       onClick={() => {
-                        if (hasSubs) {
-                          setExpandedMainId(isExpandedMain ? null : c.id)
-                        } else {
-                          selectCategory(c)
-                          setExpandedMainId(null)
-                        }
+                        selectCategory(c)
+                        setExpandedMainId(hasSubs && !isExpandedMain ? c.id : null)
                       }}
                       className={cn(
                         'relative flex flex-col items-center gap-1 rounded-lg border p-2 text-xs',
-                        categoryId === c.id || isExpandedMain ? 'border-primary bg-primary/10' : 'border-border',
+                        categoryId === c.id
+                          ? 'border-primary bg-primary/10'
+                          : isExpandedMain
+                            ? 'border-primary/40'
+                            : 'border-border',
                       )}
                     >
-                      <CategoryIcon icon={c.icon} className="size-5" />
+                      <CategoryIcon icon={c.icon} color={c.color} className="size-5" />
                       <span className="w-full truncate text-center">{c.name}</span>
                       {hasSubs && (
                         <ChevronDown
@@ -268,7 +271,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
                         categoryId === sub.id ? 'border-primary bg-primary/10' : 'border-border',
                       )}
                     >
-                      <CategoryIcon icon={sub.icon} className="size-4" />
+                      <CategoryIcon icon={sub.icon} color={sub.color} className="size-4" />
                       <span className="w-full truncate text-center">{sub.name}</span>
                     </button>
                   ))}

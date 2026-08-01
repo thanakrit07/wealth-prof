@@ -96,7 +96,7 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
           onClick={onClearCategory}
           className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
         >
-          <CategoryIcon icon={filterCategory.icon} className="size-3.5" />
+          <CategoryIcon icon={filterCategory.icon} color={filterCategory.color} className="size-3.5" />
           {filterCategory.name}
           <X className="size-3" aria-label="Clear category filter" />
         </button>
@@ -146,7 +146,7 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
                           {t.kind === 'transfer' ? (
                             <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
                           ) : (
-                            <CategoryIcon icon={category?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
+                            <CategoryIcon icon={category?.icon ?? null} color={category?.color} className="size-4 shrink-0 text-muted-foreground" />
                           )}
                           <span className="min-w-0 flex-1">
                             <span className="flex items-center gap-1.5">

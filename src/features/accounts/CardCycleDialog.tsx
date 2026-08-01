@@ -138,7 +138,7 @@ export function CardCycleDialog({ card, initialDate, onClose }: Props) {
           <ul className="space-y-1">
             {chargeRows.map((t) => (
               <li key={t.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-                <CategoryIcon icon={categoryById.get(t.category_id ?? '')?.icon ?? null} className="size-4 shrink-0 text-muted-foreground" />
+                <CategoryIcon icon={categoryById.get(t.category_id ?? '')?.icon ?? null} color={categoryById.get(t.category_id ?? '')?.color} className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate">{t.description || categoryById.get(t.category_id ?? '')?.name || t.kind}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{dayMonthLabel(t.date)}</span>
                 <span className="shrink-0 font-medium">{formatBaht(t.amount)}</span>

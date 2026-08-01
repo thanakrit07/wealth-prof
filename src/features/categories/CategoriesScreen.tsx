@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { closestCenter, DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronLeft, ChevronRight, GripHorizontal, Minus, Pencil, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, GripHorizontal, Pencil, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -11,7 +11,9 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CATEGORY_ICONS, CategoryIcon } from '@/lib/categoryIcons'
+import { SwipeableRow } from '@/components/SwipeableRow'
 import {
+  CATEGORY_COLORS,
   useCategories,
   useCreateCategory,
   useDeleteCategory,
@@ -33,6 +35,7 @@ export function CategoriesScreen() {
   // D10's inline expand — tapping a main opens its own screen of subs.
   const [openMainId, setOpenMainId] = useState<string | null>(null)
   const [editing, setEditing] = useState<Category | 'new' | { parentId: string } | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<Category | null>(null)
   const deleteCategory = useDeleteCategory(householdId)
   const reorder = useReorderCategories(householdId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
@@ -66,7 +69,7 @@ export function CategoriesScreen() {
           <Button variant="ghost" size="icon" className="size-8 -ml-2" onClick={() => setOpenMainId(null)} aria-label="Back">
             <ChevronLeft className="size-4" />
           </Button>
-          <CategoryIcon icon={openMain.icon} className="size-4 text-muted-foreground" />
+          <CategoryIcon icon={openMain.icon} color={openMain.color} className="size-4 text-muted-foreground" />
           <h2 className="min-w-0 flex-1 truncate font-heading text-sm font-medium">{openMain.name}</h2>
           <Button variant="ghost" size="icon" className="size-8" onClick={() => setEditing(openMain)} aria-label="Edit category">
             <Pencil className="size-3.5" />
@@ -81,12 +84,21 @@ export function CategoriesScreen() {
           <SortableContext items={subs.map((c) => c.id)} strategy={verticalListSortingStrategy}>
             <ul className="space-y-1.5">
               {subs.map((sub) => (
-                <CategoryRow key={sub.id} category={sub} onEdit={() => setEditing(sub)} onDelete={() => handleDelete(sub)} />
+                <CategoryRow key={sub.id} category={sub} onEdit={() => setEditing(sub)} onDelete={() => setConfirmingDelete(sub)} />
               ))}
             </ul>
           </SortableContext>
         </DndContext>
         {subs.length === 0 && <p className="text-sm text-muted-foreground">No sub-categories yet.</p>}
+
+        {confirmingDelete && (
+          <DeleteCategoryDialog
+            category={confirmingDelete}
+            subCount={subsOf(confirmingDelete.id).length}
+            onConfirm={() => handleDelete(confirmingDelete)}
+            onClose={() => setConfirmingDelete(null)}
+          />
+        )}
 
         {editing && (
           <CategoryDialog
@@ -130,7 +142,7 @@ export function CategoriesScreen() {
                   subtitle={subs.length > 0 ? subs.map((s) => s.name).join(', ') : undefined}
                   onOpen={() => setOpenMainId(main.id)}
                   onEdit={() => setEditing(main)}
-                  onDelete={() => handleDelete(main)}
+                  onDelete={() => setConfirmingDelete(main)}
                 />
               )
             })}
@@ -138,6 +150,15 @@ export function CategoriesScreen() {
         </SortableContext>
       </DndContext>
       {mains.length === 0 && <p className="text-sm text-muted-foreground">No categories yet.</p>}
+
+      {confirmingDelete && (
+        <DeleteCategoryDialog
+          category={confirmingDelete}
+          subCount={subsOf(confirmingDelete.id).length}
+          onConfirm={() => handleDelete(confirmingDelete)}
+          onClose={() => setConfirmingDelete(null)}
+        />
+      )}
 
       {editing && (
         <CategoryDialog
@@ -172,47 +193,106 @@ function CategoryRow({
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 }
 
   return (
-    <li ref={setNodeRef} style={style} className="flex items-center gap-1.5 rounded-lg border bg-card px-2 py-2 text-sm">
-      <button
-        type="button"
-        onClick={onDelete}
-        className="flex size-6 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
-        aria-label={`Delete ${category.name}`}
-      >
-        <Minus className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        onClick={onOpen}
-        disabled={!onOpen}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
-      >
-        <CategoryIcon icon={category.icon} className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate">{title ?? category.name}</span>
-          {subtitle && <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>}
-        </span>
-        {onOpen && <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
-      </button>
-      <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={onEdit} aria-label={`Edit ${category.name}`}>
-        <Pencil className="size-3.5" />
-      </Button>
-      <button
-        {...attributes}
-        {...listeners}
-        className="flex size-7 shrink-0 touch-none items-center justify-center text-muted-foreground"
-        aria-label={`Reorder ${category.name}`}
-      >
-        <GripHorizontal className="size-4" />
-      </button>
+    <li ref={setNodeRef} style={style} className="overflow-hidden rounded-lg border bg-card">
+      {/* Swipe to delete, matching the transaction ledger — the always-visible
+          minus button it replaces put a destructive action one stray tap away
+          in a list whose other controls are all safe. */}
+      <SwipeableRow onDelete={onDelete}>
+        <div className="flex items-center gap-1.5 px-2 py-2 text-sm">
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={!onOpen}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
+          >
+            <CategoryIcon icon={category.icon} color={category.color} className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{title ?? category.name}</span>
+              {subtitle && <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>}
+            </span>
+            {onOpen && <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+          </button>
+          <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={onEdit} aria-label={`Edit ${category.name}`}>
+            <Pencil className="size-3.5" />
+          </Button>
+          <button
+            {...attributes}
+            {...listeners}
+            className="flex size-7 shrink-0 touch-none items-center justify-center text-muted-foreground"
+            aria-label={`Reorder ${category.name}`}
+          >
+            <GripHorizontal className="size-4" />
+          </button>
+        </div>
+      </SwipeableRow>
     </li>
+  )
+}
+
+// Deleting a main takes its sub-categories with it, and (when anything
+// references them) archives rather than removes — neither is guessable from
+// a trash icon, so both are spelled out before the action runs.
+function DeleteCategoryDialog({
+  category,
+  subCount,
+  onConfirm,
+  onClose,
+}: {
+  category: Category
+  subCount: number
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete "{category.name}"?</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 text-sm text-muted-foreground">
+          {subCount > 0 && (
+            <p className="font-medium text-destructive">
+              Its {subCount} sub-{subCount === 1 ? 'category' : 'categories'} will be deleted too.
+            </p>
+          )}
+          <p>
+            If any transaction, recurring rule or installment still uses it, it is archived instead of deleted, so
+            those records keep their category.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              onConfirm()
+              onClose()
+            }}
+          >
+            Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
 // Icon names ("utensils-crossed") mean nothing to the person picking one, so
 // the grid is icon-only; the Emoji tab lets any emoji be a custom icon
 // (DESIGN.md §4.2 v3.1) using the phone's own emoji keyboard.
-function IconPicker({ value, onChange }: { value: string; onChange: (icon: string) => void }) {
+function IconPicker({
+  value,
+  color,
+  onChange,
+  onColorChange,
+}: {
+  value: string
+  color: string | null
+  onChange: (icon: string) => void
+  onColorChange: (color: string | null) => void
+}) {
   const isEmoji = !(value in CATEGORY_ICONS)
   const [mode, setMode] = useState<'icon' | 'emoji'>(isEmoji ? 'emoji' : 'icon')
 
@@ -245,14 +325,14 @@ function IconPicker({ value, onChange }: { value: string; onChange: (icon: strin
                 value === key ? 'border-primary bg-primary/10' : 'border-transparent hover:bg-accent',
               )}
             >
-              <CategoryIcon icon={key} className="size-5" />
+              <CategoryIcon icon={key} color={color} className="size-5" />
             </button>
           ))}
         </div>
       ) : (
         <div className="flex items-center gap-3 rounded-lg border p-3">
           <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted">
-            <CategoryIcon icon={isEmoji ? value : null} className="size-6" />
+            <CategoryIcon icon={isEmoji ? value : null} color={color} className="size-6" />
           </span>
           <Input
             value={isEmoji ? value : ''}
@@ -260,6 +340,35 @@ function IconPicker({ value, onChange }: { value: string; onChange: (icon: strin
             placeholder="Type or paste an emoji 🍜"
             aria-label="Emoji icon"
           />
+        </div>
+      )}
+
+      {/* Emoji carry their own colours, so tinting belongs to the icon tab.
+          Keyed off the open tab, not the saved value: someone switching from
+          an emoji to an icon needs the swatches before they pick, not after. */}
+      {mode === 'icon' && (
+        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+          <button
+            type="button"
+            onClick={() => onColorChange(null)}
+            aria-label="Default colour"
+            className={cn(
+              'flex size-7 items-center justify-center rounded-full border-2 bg-muted text-[10px] text-muted-foreground',
+              color === null ? 'border-primary' : 'border-transparent',
+            )}
+          >
+            —
+          </button>
+          {CATEGORY_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onColorChange(c)}
+              aria-label={`Colour ${c}`}
+              className={cn('size-7 rounded-full border-2', color === c ? 'border-foreground' : 'border-transparent')}
+              style={{ backgroundColor: c }}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -282,6 +391,7 @@ function CategoryDialog({
   const { householdId } = useHousehold()
   const [name, setName] = useState(category?.name ?? '')
   const [icon, setIcon] = useState(category?.icon ?? ICON_KEYS[0])
+  const [color, setColor] = useState<string | null>(category?.color ?? null)
   const [archived, setArchived] = useState(category?.archived ?? false)
   const create = useCreateCategory(householdId)
   const update = useUpdateCategory(householdId)
@@ -290,9 +400,9 @@ function CategoryDialog({
 
   async function handleSave() {
     if (category) {
-      await update.mutateAsync({ id: category.id, name, icon, archived })
+      await update.mutateAsync({ id: category.id, name, icon, color, archived })
     } else {
-      await create.mutateAsync({ name, kind, icon, sortOrder: nextSortOrder, parentId })
+      await create.mutateAsync({ name, kind, icon, color, sortOrder: nextSortOrder, parentId })
     }
     onClose()
   }
@@ -310,7 +420,7 @@ function CategoryDialog({
             <Label htmlFor="category-name">Name</Label>
             <Input id="category-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
-          <IconPicker value={icon} onChange={setIcon} />
+          <IconPicker value={icon} color={color} onChange={setIcon} onColorChange={setColor} />
           {category && (
             <div className="flex items-center justify-between">
               <div>

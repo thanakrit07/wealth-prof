@@ -46,11 +46,11 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react'
-import type { ComponentType } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
 
 // Curated icon set for categories and the quick-add icon grid (DESIGN.md
 // §7.2). Keyed by a stable string stored in categories.icon.
-export const CATEGORY_ICONS: Record<string, ComponentType<{ className?: string }>> = {
+export const CATEGORY_ICONS: Record<string, ComponentType<{ className?: string; style?: CSSProperties }>> = {
   // Food & drink
   food: UtensilsCrossed,
   coffee: Coffee,
@@ -112,19 +112,36 @@ export const CATEGORY_ICONS: Record<string, ComponentType<{ className?: string }
  * works as a custom icon (DESIGN.md §4.2 v3.1) — no upload, no storage, no
  * schema change, and it renders offline.
  */
-export function CategoryIcon({ icon, className }: { icon: string | null; className?: string }) {
+export function CategoryIcon({
+  icon,
+  color,
+  className,
+}: {
+  icon: string | null
+  /** Hex colour; null/undefined leaves whatever text colour the caller set. */
+  color?: string | null
+  className?: string
+}) {
+  // Lucide icons draw with `currentColor`, so setting colour here tints them.
+  // Emoji carry their own colours and ignore it, which is the right outcome.
+  const style = color ? { color } : undefined
+
   if (icon && icon in CATEGORY_ICONS) {
     const Icon = CATEGORY_ICONS[icon]
-    return <Icon className={className} />
+    return <Icon className={className} style={style} />
   }
   if (icon && icon.trim()) {
     // Match the lucide icons' box so grids and rows stay aligned; the font
     // size is set in em so it tracks whatever size-* class the caller used.
     return (
-      <span className={className} aria-hidden style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1em', lineHeight: 1 }}>
+      <span
+        className={className}
+        aria-hidden
+        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1em', lineHeight: 1, ...style }}
+      >
         {icon}
       </span>
     )
   }
-  return <Sparkles className={className} />
+  return <Sparkles className={className} style={style} />
 }

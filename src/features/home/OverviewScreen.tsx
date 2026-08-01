@@ -164,7 +164,7 @@ export function OverviewScreen({ month, person, onCategorySelect }: Props) {
                           onClick={() => onCategorySelect(main.id)}
                           className="flex min-w-0 flex-1 items-center gap-2 text-left"
                         >
-                          <CategoryIcon icon={main.icon} className="size-4 shrink-0 text-muted-foreground" />
+                          <CategoryIcon icon={main.icon} color={main.color} className="size-4 shrink-0 text-muted-foreground" />
                           <span className="flex-1 truncate">{main.name}</span>
                           <span>{formatBaht(total)}</span>
                         </button>
@@ -194,7 +194,7 @@ export function OverviewScreen({ month, person, onCategorySelect }: Props) {
                               onClick={() => onCategorySelect(category.id)}
                               className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors active:bg-accent/60"
                             >
-                              <CategoryIcon icon={category.icon} className="size-3.5 shrink-0 text-muted-foreground" />
+                              <CategoryIcon icon={category.icon} color={category.color} className="size-3.5 shrink-0 text-muted-foreground" />
                               <span className="flex-1 truncate">{category.name}</span>
                               <span className="text-muted-foreground">{formatBaht(subTotal)}</span>
                             </button>
