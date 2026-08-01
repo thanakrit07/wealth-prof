@@ -5,8 +5,7 @@ import { toast } from 'sonner'
 import { SwipeableRow } from '@/components/SwipeableRow'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { effectiveMainId, useCategories } from '@/lib/categories'
-import { useAccounts } from '@/lib/accounts'
-import { useCards } from '@/lib/cards'
+import { useInstrumentNames } from '@/lib/instruments'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
@@ -29,8 +28,9 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   const range = useMemo(() => monthRange(month), [month])
   const { data: transactions } = useTransactions(householdId, range)
   const { data: categories } = useCategories(householdId)
-  const { data: accounts } = useAccounts(householdId)
-  const { data: cards } = useCards(householdId)
+  // Includes deleted accounts/cards, so a past transaction keeps naming
+  // where the money actually moved (see useInstrumentNames).
+  const { data: instrumentName } = useInstrumentNames(householdId)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const remove = useDeleteTransaction(householdId)
   const queryClient = useQueryClient()
@@ -51,12 +51,6 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   }
 
   const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
-  const instrumentName = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const a of accounts ?? []) map.set(`account:${a.id}`, a.name)
-    for (const c of cards ?? []) map.set(`card:${c.id}`, c.name)
-    return map
-  }, [accounts, cards])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
 
   // A main category's filter also matches transactions filed under its subs
@@ -83,8 +77,8 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   function instrumentLabel(t: Transaction, side: 'from' | 'to'): string {
     const accountId = side === 'from' ? t.from_account_id : t.to_account_id
     const cardId = side === 'from' ? t.from_card_id : t.to_card_id
-    if (accountId) return instrumentName.get(`account:${accountId}`) ?? 'Account'
-    if (cardId) return instrumentName.get(`card:${cardId}`) ?? 'Card'
+    if (accountId) return instrumentName?.[`account:${accountId}`] ?? 'Account'
+    if (cardId) return instrumentName?.[`card:${cardId}`] ?? 'Card'
     return ''
   }
 

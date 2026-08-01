@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Pencil, Plus } from 'lucide-react'
+import { toast } from 'sonner'
+import { SwipeableRow } from '@/components/SwipeableRow'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -11,7 +13,14 @@ import { OwnerSelect } from '@/components/OwnerSelect'
 import { useAccounts, useCreateAccount, useUpdateAccount, type Account, type AccountType } from '@/lib/accounts'
 import { useCards, useCreateCard, useUpdateCard, type Card } from '@/lib/cards'
 import { useHousehold } from '@/lib/HouseholdContext'
+import {
+  isInstrumentBlocked,
+  useDeleteInstrument,
+  useInstrumentUsage,
+  type InstrumentKind,
+} from '@/lib/instruments'
 import { formatBaht } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { CardCycleDialog } from './CardCycleDialog'
 
 export function AccountsScreen() {
@@ -21,6 +30,7 @@ export function AccountsScreen() {
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
   const [viewingCycleCard, setViewingCycleCard] = useState<Card | null>(null)
+  const [deleting, setDeleting] = useState<{ kind: InstrumentKind; id: string; name: string } | null>(null)
 
   return (
     <div className="space-y-6 p-4">
@@ -34,17 +44,21 @@ export function AccountsScreen() {
         </div>
         <ul className="space-y-1">
           {(accounts ?? []).map((account) => (
-            <li key={account.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-              <Badge variant="secondary" className="capitalize">
-                {account.type}
-              </Badge>
-              <span className={account.archived ? 'flex-1 text-muted-foreground line-through' : 'flex-1'}>
-                {account.name}
-              </span>
-              <span className="text-muted-foreground">{formatBaht(account.anchor_balance)}</span>
-              <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingAccount(account)} aria-label="Edit">
-                <Pencil className="size-3.5" />
-              </Button>
+            <li key={account.id} className="overflow-hidden rounded-lg border">
+              <SwipeableRow onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}>
+                <div className="flex items-center gap-2 px-3 py-2 text-sm">
+                  <Badge variant="secondary" className="capitalize">
+                    {account.type}
+                  </Badge>
+                  <span className={account.archived ? 'flex-1 text-muted-foreground line-through' : 'flex-1'}>
+                    {account.name}
+                  </span>
+                  <span className="text-muted-foreground">{formatBaht(account.anchor_balance)}</span>
+                  <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingAccount(account)} aria-label="Edit">
+                    <Pencil className="size-3.5" />
+                  </Button>
+                </div>
+              </SwipeableRow>
             </li>
           ))}
           {accounts?.length === 0 && <p className="text-sm text-muted-foreground">No accounts yet.</p>}
@@ -61,17 +75,21 @@ export function AccountsScreen() {
         </div>
         <ul className="space-y-1">
           {(cards ?? []).map((card) => (
-            <li key={card.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-              <button
-                onClick={() => !card.archived && setViewingCycleCard(card)}
-                className={card.archived ? 'flex-1 text-left text-muted-foreground line-through' : 'flex-1 text-left'}
-              >
-                {card.name}
-              </button>
-              <span className="text-muted-foreground">{formatBaht(card.credit_limit)} limit</span>
-              <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingCard(card)} aria-label="Edit">
-                <Pencil className="size-3.5" />
-              </Button>
+            <li key={card.id} className="overflow-hidden rounded-lg border">
+              <SwipeableRow onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}>
+                <div className="flex items-center gap-2 px-3 py-2 text-sm">
+                  <button
+                    onClick={() => !card.archived && setViewingCycleCard(card)}
+                    className={card.archived ? 'flex-1 text-left text-muted-foreground line-through' : 'flex-1 text-left'}
+                  >
+                    {card.name}
+                  </button>
+                  <span className="text-muted-foreground">{formatBaht(card.credit_limit)} limit</span>
+                  <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingCard(card)} aria-label="Edit">
+                    <Pencil className="size-3.5" />
+                  </Button>
+                </div>
+              </SwipeableRow>
             </li>
           ))}
           {cards?.length === 0 && <p className="text-sm text-muted-foreground">No cards yet.</p>}
@@ -93,6 +111,7 @@ export function AccountsScreen() {
         />
       )}
       {viewingCycleCard && <CardCycleDialog card={viewingCycleCard} onClose={() => setViewingCycleCard(null)} />}
+      {deleting && <DeleteInstrumentDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
   )
 }
@@ -287,6 +306,121 @@ function CardDialog({ card, onClose }: { card: Card | null; onClose: () => void 
           </Button>
           <Button onClick={handleSave} disabled={!name.trim() || create.isPending || update.isPending}>
             Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Deleting an account or card asks what should happen to its transactions,
+ * because both answers are reasonable and destroy different things: a
+ * mistyped account should take its rows with it, while a bank you've closed
+ * has real history worth keeping. Kept rows still show the old name (see
+ * useInstrumentNames), so "keep" doesn't quietly anonymise them.
+ */
+function DeleteInstrumentDialog({
+  target,
+  onClose,
+}: {
+  target: { kind: InstrumentKind; id: string; name: string }
+  onClose: () => void
+}) {
+  const { householdId } = useHousehold()
+  const { data: usage, isPending } = useInstrumentUsage(target.kind, target.id)
+  const remove = useDeleteInstrument(householdId)
+  const [withTransactions, setWithTransactions] = useState(false)
+
+  const blocked = usage != null && isInstrumentBlocked(usage)
+  const noun = target.kind === 'account' ? 'account' : 'card'
+
+  async function handleDelete() {
+    if (!usage) return
+    await remove.mutateAsync({ kind: target.kind, id: target.id, withTransactions, usage })
+    toast.success(
+      withTransactions
+        ? `Deleted "${target.name}" and ${usage.transactions} transaction${usage.transactions === 1 ? '' : 's'}`
+        : `Deleted "${target.name}"`,
+    )
+    onClose()
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete {noun} "{target.name}"?</DialogTitle>
+        </DialogHeader>
+
+        {isPending || !usage ? (
+          <p className="text-sm text-muted-foreground">Checking what uses it…</p>
+        ) : blocked ? (
+          <div className="space-y-2 text-sm">
+            <p className="font-medium text-destructive">This {noun} is still scheduled to be used.</p>
+            <ul className="list-inside list-disc text-muted-foreground">
+              {usage.recurringRules > 0 && (
+                <li>
+                  {usage.recurringRules} recurring rule{usage.recurringRules === 1 ? '' : 's'}
+                </li>
+              )}
+              {usage.installments > 0 && (
+                <li>
+                  {usage.installments} installment plan{usage.installments === 1 ? '' : 's'}
+                </li>
+              )}
+            </ul>
+            <p className="text-muted-foreground">
+              They would keep creating transactions against {target.kind === 'account' ? 'an' : 'a'} {noun} that no
+              longer exists. Delete or repoint them first, then come back.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              {usage.transactions === 0
+                ? `Nothing is recorded against this ${noun}.`
+                : `${usage.transactions} transaction${usage.transactions === 1 ? '' : 's'} reference${usage.transactions === 1 ? 's' : ''} it.`}
+            </p>
+            {usage.transactions > 0 && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setWithTransactions(false)}
+                  className={cn(
+                    'w-full rounded-lg border p-3 text-left',
+                    !withTransactions ? 'border-primary bg-primary/5' : 'border-border',
+                  )}
+                >
+                  <span className="block font-medium">Keep the transactions</span>
+                  <span className="block text-xs text-muted-foreground">
+                    History stays in reports and still shows "{target.name}".
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWithTransactions(true)}
+                  className={cn(
+                    'w-full rounded-lg border p-3 text-left',
+                    withTransactions ? 'border-destructive bg-destructive/5' : 'border-border',
+                  )}
+                >
+                  <span className="block font-medium text-destructive">Delete them too</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Removes {usage.transactions} record{usage.transactions === 1 ? '' : 's'} from every total.
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={handleDelete} disabled={blocked || isPending || remove.isPending}>
+            Delete
           </Button>
         </DialogFooter>
       </DialogContent>
