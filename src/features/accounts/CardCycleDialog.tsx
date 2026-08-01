@@ -10,7 +10,7 @@ import { useSetCardCycleAdjustment, useCardCycleAdjustments } from '@/lib/cardCy
 import { addDays, cycleBill, cycleOf } from '@/lib/finance/billingCycle'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
-import { useInstallmentPayments, useInstallments } from '@/lib/installments'
+import { useInstallments, usePostedPeriods } from '@/lib/installments'
 import { dayMonthLabel } from '@/lib/month'
 import { useRecurringRules } from '@/lib/recurring'
 import { useTransactions } from '@/lib/transactions'
@@ -42,7 +42,7 @@ export function CardCycleDialog({ card, initialDate, onClose }: Props) {
 
   const { data: transactions } = useTransactions(householdId, { start: cycle.start, end: cycle.end })
   const { data: installments } = useInstallments(householdId)
-  const { data: payments } = useInstallmentPayments(householdId)
+  const { data: postedPeriods } = usePostedPeriods(householdId)
   const { data: categories } = useCategories(householdId)
   const { data: adjustments } = useCardCycleAdjustments(householdId)
   const { data: rules } = useRecurringRules(householdId)
@@ -57,7 +57,6 @@ export function CardCycleDialog({ card, initialDate, onClose }: Props) {
     .filter((t) => t.from_card_id === card.id || t.to_card_id === card.id)
     .filter((t) => t.confirmed)
   const cardInstallments = (installments ?? []).filter((i) => i.card_id === card.id && i.status === 'active')
-  const paidPeriods = new Set((payments ?? []).map((p) => `${p.installment_id}:${p.period_no}`))
 
   const bill = cycleBill({
     cycle,
@@ -65,7 +64,7 @@ export function CardCycleDialog({ card, initialDate, onClose }: Props) {
     transactions: cardTransactions,
     installments: cardInstallments,
     adjustment: existingAdjustment?.amount ?? null,
-    paidPeriods,
+    postedPeriods: postedPeriods.keys,
     recurringRules: rules ?? [],
   })
   const paidSoFar = cardTransactions

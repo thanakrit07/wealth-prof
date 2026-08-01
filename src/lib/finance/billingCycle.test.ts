@@ -256,7 +256,7 @@ describe('cycleBill', () => {
     // the card — it must appear in txnTotal only, not in both terms.
     const transactions = [{ amount: 200, date: '2026-01-06', kind: 'expense' as const, to_card_id: null }]
     const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
-    expect(cycleBill({ cycle, cardId, transactions, installments, paidPeriods: new Set(['inst-1:1']) })).toBe(200)
+    expect(cycleBill({ cycle, cardId, transactions, installments, postedPeriods: new Set(['inst-1:1']) })).toBe(200)
   })
 
   it('leaves recurring out of the total unless rules are supplied', () => {

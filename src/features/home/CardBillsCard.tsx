@@ -5,7 +5,7 @@ import { useCardCycleAdjustments } from '@/lib/cardCycleAdjustments'
 import { cycleBill, cycleDueInMonth, type Cycle } from '@/lib/finance/billingCycle'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
-import { useInstallmentPayments, useInstallments } from '@/lib/installments'
+import { useInstallments, usePostedPeriods } from '@/lib/installments'
 import { dayMonthLabel } from '@/lib/month'
 import { useRecurringRules } from '@/lib/recurring'
 import { useTransactions } from '@/lib/transactions'
@@ -23,7 +23,7 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
   const { householdId } = useHousehold()
   const { data: cards } = useCards(householdId)
   const { data: installments } = useInstallments(householdId)
-  const { data: payments } = useInstallmentPayments(householdId)
+  const { data: postedPeriods } = usePostedPeriods(householdId)
   const { data: adjustments } = useCardCycleAdjustments(householdId)
   const { data: rules } = useRecurringRules(householdId)
 
@@ -44,11 +44,6 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
   }, [cycles])
   const { data: transactions } = useTransactions(householdId, range ?? { start: month, end: month })
 
-  const paidPeriods = useMemo(
-    () => new Set((payments ?? []).map((p) => `${p.installment_id}:${p.period_no}`)),
-    [payments],
-  )
-
   const rows = useMemo(() => {
     return cycles
       .map(({ card, cycle }) => {
@@ -63,7 +58,7 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
           transactions: cardTxns,
           installments: cardInstallments,
           adjustment: adjustment?.amount ?? null,
-          paidPeriods,
+          postedPeriods: postedPeriods.keys,
           recurringRules: rules ?? [],
         })
         const paid = cardTxns
@@ -73,7 +68,7 @@ export function CardBillsCard({ month, onSelectCycle }: Props) {
       })
       .filter((row) => row.bill > 0)
       .sort((a, b) => (a.cycle.dueDate < b.cycle.dueDate ? -1 : 1))
-  }, [cycles, transactions, installments, adjustments, paidPeriods, rules])
+  }, [cycles, transactions, installments, adjustments, postedPeriods, rules])
 
   if (rows.length === 0) return null
 

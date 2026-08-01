@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, X } from 'lucide-react'
+import { ArrowRightLeft, Check, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { SwipeableRow } from '@/components/SwipeableRow'
 import { CategoryIcon } from '@/lib/categoryIcons'
@@ -11,10 +11,16 @@ import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
 import { dayOfMonthLabel, monthRange, weekdayLabel } from '@/lib/month'
 import { supabase } from '@/lib/supabase'
+import { parsePeriodSourceKey } from '@/lib/installmentMaterialiser'
+import { useInstallmentPayments, useSetPeriodPaid } from '@/lib/installments'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
 import { ReviewStrip } from './ReviewStrip'
 import { TransactionSheet } from './TransactionSheet'
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
 
 interface Props {
   month: string
@@ -33,7 +39,27 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   const { data: instrumentName } = useInstrumentNames(householdId)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const remove = useDeleteTransaction(householdId)
+  const { data: payments } = useInstallmentPayments(householdId)
+  const setPeriodPaid = useSetPeriodPaid(householdId)
   const queryClient = useQueryClient()
+
+  // Settled installment periods, keyed "<installmentId>:<periodNo>".
+  const paidKeys = useMemo(
+    () => new Set((payments ?? []).map((p) => `${p.installment_id}:${p.period_no}`)),
+    [payments],
+  )
+
+  /**
+   * The tick box only exists on installment periods charged to a **card**:
+   * that is the one case where posting and settling genuinely differ — the
+   * charge is on the statement the moment the period lands, but the money
+   * only leaves when the statement gets paid. Cash and bank rows have no
+   * such gap, so a checkbox there would be a question with no answer.
+   */
+  function installmentPeriodOf(t: Transaction) {
+    if (t.source !== 'installment' || !t.from_card_id) return null
+    return parsePeriodSourceKey(t.source_key)
+  }
 
   // Soft delete with undo, same contract as saving from the sheet: the row
   // only sets deleted_at, so restoring is a matching update.
@@ -130,43 +156,82 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
                   const details = [category?.name === title ? null : category?.name, instrumentLabel(t, 'from'), owner?.display_name]
                     .filter(Boolean)
                     .join(' · ')
+                  const period = installmentPeriodOf(t)
+                  const periodKey = period ? `${period.installmentId}:${period.periodNo}` : null
+                  const periodPaid = periodKey != null && paidKeys.has(periodKey)
                   return (
                     <li key={t.id} className="border-t">
                       <SwipeableRow onDelete={() => handleDelete(t)}>
-                        <button
-                          onClick={() => setEditing(t)}
-                          className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition-colors active:bg-accent/60"
-                        >
-                          {t.kind === 'transfer' ? (
-                            <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
-                          ) : (
-                            <CategoryIcon icon={category?.icon ?? null} color={category?.color} className="size-4 shrink-0 text-muted-foreground" />
-                          )}
-                          <span className="min-w-0 flex-1">
-                            <span className="flex items-center gap-1.5">
-                              <span className="truncate text-sm">{title}</span>
-                              {!t.confirmed && (
-                                <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
-                                  Pending
-                                </span>
-                              )}
-                            </span>
-                            {details && <span className="block truncate text-[11px] text-muted-foreground">{details}</span>}
-                          </span>
-                          <span
-                            className={cn(
-                              'shrink-0 text-sm tabular-nums',
-                              t.kind === 'income'
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : t.kind === 'transfer'
-                                  ? 'text-muted-foreground'
-                                  : 'text-foreground',
-                            )}
+                        <div className="flex items-center">
+                          <button
+                            onClick={() => setEditing(t)}
+                            className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 pl-3 text-left transition-colors active:bg-accent/60"
                           >
-                            {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
-                            {formatBaht(t.amount)}
-                          </span>
-                        </button>
+                            {t.kind === 'transfer' ? (
+                              <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
+                            ) : (
+                              <CategoryIcon icon={category?.icon ?? null} color={category?.color} className="size-4 shrink-0 text-muted-foreground" />
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-1.5">
+                                <span className={cn('truncate text-sm', periodPaid && 'text-muted-foreground')}>{title}</span>
+                                {!t.confirmed && (
+                                  <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                                    Pending
+                                  </span>
+                                )}
+                              </span>
+                              {details && <span className="block truncate text-[11px] text-muted-foreground">{details}</span>}
+                            </span>
+                            <span
+                              className={cn(
+                                'shrink-0 text-sm tabular-nums',
+                                t.kind === 'income'
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : t.kind === 'transfer'
+                                    ? 'text-muted-foreground'
+                                    : 'text-foreground',
+                              )}
+                            >
+                              {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
+                              {formatBaht(t.amount)}
+                            </span>
+                          </button>
+
+                          {/* Card-billed installment periods only: tick when the
+                              statement carrying this period has been paid. */}
+                          {period ? (
+                            <button
+                              onClick={() =>
+                                setPeriodPaid.mutate({
+                                  installmentId: period.installmentId,
+                                  periodNo: period.periodNo,
+                                  transactionId: t.id,
+                                  paidDate: t.date > todayIso() ? todayIso() : t.date,
+                                  paid: !periodPaid,
+                                })
+                              }
+                              disabled={setPeriodPaid.isPending}
+                              role="checkbox"
+                              aria-checked={periodPaid}
+                              aria-label={`Mark period ${period.periodNo} of ${title} paid`}
+                              className="shrink-0 px-3 py-1.5"
+                            >
+                              <span
+                                className={cn(
+                                  'flex size-5 items-center justify-center rounded-md border transition-colors',
+                                  periodPaid
+                                    ? 'border-emerald-500 bg-emerald-500 text-white'
+                                    : 'border-muted-foreground/40 text-transparent',
+                                )}
+                              >
+                                <Check className="size-3.5" />
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="w-3 shrink-0" />
+                          )}
+                        </div>
                       </SwipeableRow>
                     </li>
                   )

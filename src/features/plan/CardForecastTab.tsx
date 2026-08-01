@@ -6,7 +6,7 @@ import { useCards } from '@/lib/cards'
 import { cycleBill, cycleDueInMonth } from '@/lib/finance/billingCycle'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
-import { useInstallmentPayments, useInstallments } from '@/lib/installments'
+import { useInstallments, usePostedPeriods } from '@/lib/installments'
 import { currentMonthKey, dayMonthLabel, monthLabel, shiftMonth } from '@/lib/month'
 import { useRecurringRules } from '@/lib/recurring'
 import { useTransactions } from '@/lib/transactions'
@@ -27,7 +27,7 @@ export function CardForecastTab() {
   const { householdId } = useHousehold()
   const { data: cards } = useCards(householdId)
   const { data: installments } = useInstallments(householdId)
-  const { data: payments } = useInstallmentPayments(householdId)
+  const { data: postedPeriods } = usePostedPeriods(householdId)
   const { data: adjustments } = useCardCycleAdjustments(householdId)
   const { data: rules } = useRecurringRules(householdId)
 
@@ -56,11 +56,6 @@ export function CardForecastTab() {
   }, [grid])
   const { data: transactions } = useTransactions(householdId, range ?? { start: '', end: '' })
 
-  const paidPeriods = useMemo(
-    () => new Set((payments ?? []).map((p) => `${p.installment_id}:${p.period_no}`)),
-    [payments],
-  )
-
   const rows = useMemo(() => {
     return grid.map(({ month, cells }) => {
       const cards = cells
@@ -76,7 +71,7 @@ export function CardForecastTab() {
             transactions: cardTxns,
             installments: cardInstallments,
             adjustment: adjustment?.amount ?? null,
-            paidPeriods,
+            postedPeriods: postedPeriods.keys,
             recurringRules: includeRecurring ? (rules ?? []) : undefined,
           })
           return { card, cycle, bill }
@@ -85,7 +80,7 @@ export function CardForecastTab() {
         .sort((a, b) => (a.cycle.dueDate < b.cycle.dueDate ? -1 : 1))
       return { month, cards, total: cards.reduce((sum, c) => sum + c.bill, 0) }
     })
-  }, [grid, transactions, installments, adjustments, paidPeriods, rules, includeRecurring])
+  }, [grid, transactions, installments, adjustments, postedPeriods, rules, includeRecurring])
 
   const peak = Math.max(...rows.map((r) => r.total), 0)
 

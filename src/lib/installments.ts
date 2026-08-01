@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { parsePeriodSourceKey } from './installmentMaterialiser'
 import { supabase } from './supabase'
 
 export type InstallmentStatus = 'active' | 'done' | 'cancelled'
+
+// Ticking a period twice (two devices, double tap) is a no-op, not an error.
+const UNIQUE_VIOLATION = '23505'
 
 export interface Installment {
   id: string
@@ -63,6 +67,47 @@ export function useInstallmentPayments(householdId: string) {
   })
 }
 
+export interface PostedPeriods {
+  /** "<installmentId>:<periodNo>" keys — `cycleBill`'s double-count guard. */
+  keys: ReadonlySet<string>
+  /** Same keys → the id of the transaction that posted that period. */
+  transactionIdByKey: ReadonlyMap<string, string>
+}
+
+const EMPTY_POSTED: PostedPeriods = { keys: new Set(), transactionIdByKey: new Map() }
+
+/**
+ * Which periods already exist as transactions.
+ *
+ * Derived from the transactions themselves, not from `installment_payments`:
+ * since D11 every period is posted up front but only *settled* periods have
+ * a payment row, so the two sets are no longer the same thing.
+ */
+export function usePostedPeriods(householdId: string) {
+  return useQuery({
+    queryKey: ['installment_posted_periods', householdId],
+    queryFn: async (): Promise<PostedPeriods> => {
+      const { data, error } = await supabase
+        .from('v_transactions')
+        .select('id, source_key')
+        .eq('household_id', householdId)
+        .eq('source', 'installment')
+      if (error) throw error
+      const keys = new Set<string>()
+      const transactionIdByKey = new Map<string, string>()
+      for (const row of data ?? []) {
+        const parsed = parsePeriodSourceKey(row.source_key as string | null)
+        if (!parsed) continue
+        const key = `${parsed.installmentId}:${parsed.periodNo}`
+        keys.add(key)
+        transactionIdByKey.set(key, row.id as string)
+      }
+      return { keys, transactionIdByKey }
+    },
+    initialData: EMPTY_POSTED,
+  })
+}
+
 export type InstallmentInput = Omit<Installment, 'id' | 'household_id'>
 
 export function useCreateInstallment(householdId: string) {
@@ -102,88 +147,72 @@ export function useDeleteInstallment(householdId: string) {
 }
 
 /**
- * Marks the next period paid for an account-billed installment (DESIGN
- * §6.3, §6.7): always creates the paired transaction, so the account
- * balance can never drift from the payment history. Card-billed
- * installments no longer go through this — InstallmentMaterialiser posts
- * their periods automatically on the period date (§6.7 D11), since the
- * charge lands on the real statement whether or not anyone taps anything.
+ * Toggles whether an installment period has been **settled** (DESIGN §4.5
+ * D2: a payment is an event, not a counter).
+ *
+ * Posting and settling are separate: the materialiser already wrote every
+ * period's transaction when the plan was created, so this never creates or
+ * deletes a transaction — it only records that the money for that period
+ * actually went out, linked to the transaction that represents the charge.
+ * For card-billed plans that is the ledger checkbox (the charge is settled
+ * when the statement carrying it is paid); for account-billed plans it is
+ * the "mark period paid" button.
  */
-export function useMarkPeriodPaid(householdId: string) {
+export function useSetPeriodPaid(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({
-      installment,
+      installmentId,
       periodNo,
+      transactionId,
       paidDate,
-      ownerId,
+      paid,
     }: {
-      installment: Installment
+      installmentId: string
       periodNo: number
+      transactionId: string | null
       paidDate: string
-      ownerId: string | null
+      paid: boolean
     }) => {
-      const amount =
-        periodNo === installment.total_periods && installment.final_amount != null
-          ? installment.final_amount
-          : installment.monthly_amount
-      const { data: txn, error: txnError } = await supabase
-        .from('transactions')
-        .insert({
+      if (paid) {
+        const { error } = await supabase.from('installment_payments').insert({
           household_id: householdId,
-          date: paidDate,
-          kind: 'expense',
-          category_id: installment.category_id,
-          category_kind: installment.category_id ? 'expense' : null,
-          description: `${installment.name} (งวดที่ ${periodNo}/${installment.total_periods})`,
-          amount,
-          owner_id: ownerId,
-          from_account_id: installment.account_id,
-          source: 'installment',
-          // Same key format as the materialiser (installmentMaterialiser.ts)
-          // so an early manual payment here is recognised as "already
-          // posted" and the materialiser doesn't try to post it again once
-          // the period's due date arrives.
-          source_key: `installment:${installment.id}:${periodNo}`,
+          installment_id: installmentId,
+          period_no: periodNo,
+          paid_date: paidDate,
+          transaction_id: transactionId,
         })
-        .select('id')
+        if (error && error.code !== UNIQUE_VIOLATION) throw error
+      } else {
+        const { error } = await supabase
+          .from('installment_payments')
+          .delete()
+          .eq('installment_id', installmentId)
+          .eq('period_no', periodNo)
+        if (error) throw error
+      }
+
+      // A plan is done once every period is settled, and un-ticking the last
+      // one has to reopen it — otherwise a mis-tap permanently retires a plan
+      // that still owes money.
+      const { data: inst } = await supabase
+        .from('installments')
+        .select('total_periods, status')
+        .eq('id', installmentId)
         .single()
-      if (txnError) throw txnError
+      if (!inst) return
 
-      const { error } = await supabase.from('installment_payments').insert({
-        household_id: householdId,
-        installment_id: installment.id,
-        period_no: periodNo,
-        paid_date: paidDate,
-        transaction_id: txn.id,
-      })
-      if (error) throw error
+      const { count } = await supabase
+        .from('installment_payments')
+        .select('id', { count: 'exact', head: true })
+        .eq('installment_id', installmentId)
 
-      if (periodNo === installment.total_periods) {
-        await supabase.from('installments').update({ status: 'done' }).eq('id', installment.id)
+      const settled = (count ?? 0) >= inst.total_periods
+      if (settled && inst.status === 'active') {
+        await supabase.from('installments').update({ status: 'done' }).eq('id', installmentId)
+      } else if (!settled && inst.status === 'done') {
+        await supabase.from('installments').update({ status: 'active' }).eq('id', installmentId)
       }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['installments', householdId] })
-      queryClient.invalidateQueries({ queryKey: ['installment_payments', householdId] })
-      queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
-    },
-  })
-}
-
-/** Undo the most recent payment (soft delete + detach transaction). */
-export function useUndoLastPayment(householdId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (payment: InstallmentPayment) => {
-      if (payment.transaction_id) {
-        await supabase
-          .from('transactions')
-          .update({ deleted_at: new Date().toISOString() })
-          .eq('id', payment.transaction_id)
-      }
-      const { error } = await supabase.from('installment_payments').delete().eq('id', payment.id)
-      if (error) throw error
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['installments', householdId] })

@@ -128,43 +128,12 @@ export function useUnconfirmedTransactions(householdId: string) {
   })
 }
 
-const UNIQUE_VIOLATION = '23505'
-
 export function useConfirmTransaction(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (transaction: Transaction) => {
-      const { error } = await supabase.from('transactions').update({ confirmed: true }).eq('id', transaction.id)
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('transactions').update({ confirmed: true }).eq('id', id)
       if (error) throw error
-
-      // Account-billed installment periods only become a "paid" event once
-      // reviewed here (DESIGN §4.5/§6.7) — card-billed periods already wrote
-      // their installment_payments row when the materialiser posted them.
-      if (transaction.source === 'installment' && transaction.source_key) {
-        const [, installmentId, periodNoStr] = transaction.source_key.split(':')
-        const periodNo = Number(periodNoStr)
-
-        const { error: paymentError } = await supabase.from('installment_payments').insert({
-          household_id: householdId,
-          installment_id: installmentId,
-          period_no: periodNo,
-          paid_date: transaction.date,
-          transaction_id: transaction.id,
-        })
-        if (paymentError && paymentError.code !== UNIQUE_VIOLATION) throw paymentError
-
-        const { data: inst } = await supabase
-          .from('installments')
-          .select('total_periods')
-          .eq('id', installmentId)
-          .single()
-        if (inst && periodNo >= inst.total_periods) {
-          await supabase.from('installments').update({ status: 'done' }).eq('id', installmentId)
-        }
-
-        queryClient.invalidateQueries({ queryKey: ['installments', householdId] })
-        queryClient.invalidateQueries({ queryKey: ['installment_payments', householdId] })
-      }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions', householdId] }),
   })

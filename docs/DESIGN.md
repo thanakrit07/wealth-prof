@@ -396,7 +396,7 @@ create table installment_payments (
 
 `transaction_id` is the single source of truth for whether the money actually left an account: for account-billed installments the app always creates the paired transaction when a period is marked paid (see §6.3), so balances cannot drift.
 
-**v3 (D11): who writes `installment_payments` changed — the schema did not.** For **card-billed** plans the installment materialiser (§6.7) now creates the period's transaction and its `installment_payments` row automatically on the period date; the manual "mark period paid" button disappears for them. For **account-billed** plans the materialiser creates the transaction *unconfirmed* into the review strip — a real bank debit still gets a human glance before it moves a balance — and confirming it writes the payment row. Undo remains: soft-deleting the transaction removes the payment event (D2 is unchanged, events not counters).
+**v3.2: `installment_payments` means *settled*, and only that — the schema did not change.** The materialiser (§6.7) writes every period's transaction up front and never writes a payment row; a row appears only when a human ticks the period, and un-ticking deletes it. So `count(*)` is "periods actually paid", not "periods elapsed", and the plan's `status` follows it in both directions — settling the last period retires the plan, un-ticking it reopens the plan rather than stranding it as `done`. D2 is unchanged: events, not counters, and every one of them is undoable.
 
 ### 4.6 Budgets
 
@@ -610,8 +610,8 @@ The same shape as §6.6, applied to installment periods:
 materialiseInstallmentsDue(installments, today): Transaction[]
 ```
 
-* **Card-billed periods** post `confirmed = true` — the charge is on the statement regardless of what the user does, so the app should already agree with the statement (the whole point of D11). The transaction is an expense on the card, dated `periodDate`, category from the installment.
-* **Account-billed periods** post `confirmed = false` into the §6.6 review strip; confirming is what commits the balance movement. Rationale in §4.5.
+* **Every period posts at once, including future ones** *(v3.2)* — a plan is a set of known, dated, unavoidable charges, so hiding the future ones made them invisible in the months they actually land. `materialiseInstallmentsDue` runs whenever the plan list changes, so a plan created just now has its whole schedule in the ledger immediately, each row described `<name> (งวดที่ n/total)`.
+* **Posting is not settling** *(v3.2)*. Posted rows are `confirmed = true` (the user committed to the schedule when they entered the plan; a second review tap adds nothing). Whether the money has actually gone out is the separate `installment_payments` event, written by ticking the period — a checkbox that appears in the ledger only on **card-billed** periods, the one case where the two genuinely differ: the charge is on the statement the moment the period lands, but the money leaves only when that statement is paid. Account-billed periods have no such gap and are ticked from the Installments screen's period grid.
 * Runs in the same on-open/on-focus pass as `materialiseDue` — one shared "catch up now" entry point.
 * Editing/cancelling an installment affects future periods only; posted periods are ordinary transactions, exactly like edited recurring rules.
 * `projectForward` gains a sibling for installments so the forward calendar and `cycleBill`'s projection term (§6.1) come from one function, not two formulas.

@@ -120,7 +120,7 @@ export interface InstallmentLike {
 /**
  * Total installment charge falling inside [cycle.start, cycle.end].
  *
- * `paidPeriods` (keys "<installmentId>:<periodNo>") excludes periods that
+ * `postedPeriods` (keys "<installmentId>:<periodNo>") excludes periods that
  * already exist as real transactions (DESIGN §6.7 D11) — once
  * InstallmentMaterialiser posts a period, it's already inside the caller's
  * transaction total, so counting it here too would double it.
@@ -128,11 +128,11 @@ export interface InstallmentLike {
 export function installmentChargeInCycle(
   installment: InstallmentLike,
   cycle: Cycle,
-  paidPeriods: ReadonlySet<string> = new Set(),
+  postedPeriods: ReadonlySet<string> = new Set(),
 ): number {
   let total = 0
   for (let n = 1; n <= installment.total_periods; n++) {
-    if (paidPeriods.has(`${installment.id}:${n}`)) continue
+    if (postedPeriods.has(`${installment.id}:${n}`)) continue
     const date = periodDate(installment.start_date, n)
     if (date >= cycle.start && date <= cycle.end) {
       total += n === installment.total_periods && installment.final_amount != null
@@ -198,7 +198,7 @@ export interface CycleBillInput {
   /** Signed delta reconciling against the real statement, if any. */
   adjustment?: number | null
   /** "<installmentId>:<periodNo>" keys already posted as transactions. */
-  paidPeriods?: ReadonlySet<string>
+  postedPeriods?: ReadonlySet<string>
   /** Omit to leave future recurring charges out of the total. */
   recurringRules?: RecurringChargeLike[]
 }
@@ -214,7 +214,7 @@ export interface CycleBillInput {
  * Takes an options object rather than positional arguments: every term is a
  * separate source of charges, and a caller silently omitting one produces a
  * plausible-looking but wrong number (this already happened once with
- * `paidPeriods`, which double-counted posted installment periods).
+ * `postedPeriods`, which double-counted posted installment periods).
  */
 export function cycleBill({
   cycle,
@@ -222,7 +222,7 @@ export function cycleBill({
   transactions,
   installments,
   adjustment = null,
-  paidPeriods = new Set(),
+  postedPeriods = new Set(),
   recurringRules,
 }: CycleBillInput): number {
   const txnTotal = transactions
@@ -231,7 +231,7 @@ export function cycleBill({
     .reduce((sum, t) => sum + t.amount, 0)
 
   const installmentTotal = installments.reduce(
-    (sum, inst) => sum + installmentChargeInCycle(inst, cycle, paidPeriods),
+    (sum, inst) => sum + installmentChargeInCycle(inst, cycle, postedPeriods),
     0,
   )
 
