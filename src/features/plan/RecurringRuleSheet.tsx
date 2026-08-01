@@ -143,7 +143,11 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
         <div className="space-y-4 px-4 pb-4">
           <div className="space-y-1.5">
             <Label htmlFor="rule-name">Name</Label>
-            <Input id="rule-name" placeholder="Salary, Netflix, Car insurance…" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            {/* No autoFocus: opening the system keyboard the instant the sheet
+                mounts is what shoved the whole sheet off-screen on iOS
+                (DESIGN §7.2 D9 — same bug the amount keypad exists to avoid).
+                Tapping the field remains a deliberate, expected keyboard open. */}
+            <Input id="rule-name" placeholder="Salary, Netflix, Car insurance…" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
           <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
