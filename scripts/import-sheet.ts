@@ -91,7 +91,7 @@ async function main() {
   }
 
   // --- Accounts -----------------------------------------------------
-  const accountIdBySourceKey = new Map<string, string>()
+  const accountIdByName = new Map<string, string>()
   try {
     const rows = readCsv(`${dir}/accounts.csv`)
     for (const [i, row] of rows.entries()) {
@@ -121,7 +121,7 @@ async function main() {
           .select('id')
           .single()
         if (error) throw error
-        accountIdBySourceKey.set(sourceKey, data.id as string)
+        accountIdByName.set(name.trim().toLowerCase(), data.id as string)
         summary.accounts.ok++
       } catch (err) {
         summary.accounts.failed++
@@ -183,9 +183,8 @@ async function main() {
     const key = nameOrKey.trim().toLowerCase()
     const cardId = cardIdByName.get(key)
     if (cardId) return { accountId: null, cardId }
-    for (const [sourceKey, id] of accountIdBySourceKey) {
-      if (sourceKey === key) return { accountId: id, cardId: null }
-    }
+    const accountId = accountIdByName.get(key)
+    if (accountId) return { accountId, cardId: null }
     return { accountId: null, cardId: null }
   }
 
@@ -294,7 +293,10 @@ async function main() {
           from_card_id: instrument.cardId,
         }
         if (kind !== 'transfer') {
-          row_.category_id = resolveCategory(categoryName, kind as 'income' | 'expense')
+          // Sheet rows left without a category still need one (category_id is
+          // required for income/expense); fall back to "Other" rather than
+          // dropping a real transaction, and let the user re-tag it later.
+          row_.category_id = resolveCategory(categoryName, kind as 'income' | 'expense') ?? resolveCategory('Other', kind as 'income' | 'expense')
           row_.category_kind = kind
         } else {
           const toCardId = cardIdByName.get(categoryName.trim().toLowerCase()) ?? null
