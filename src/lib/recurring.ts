@@ -120,14 +120,19 @@ export async function materialiseDue(householdId: string, rules: RecurringRule[]
         kind: rule.kind,
         category_id: rule.category_id,
         category_kind: rule.category_kind,
-        description: rule.name,
         amount: rule.amount,
         owner_id: rule.owner_id,
         from_account_id: rule.from_account_id,
         from_card_id: rule.from_card_id,
         to_account_id: rule.to_account_id,
         to_card_id: rule.to_card_id,
-        note: rule.note,
+        // note is the ledger's primary label (0020): the rule's name is what
+        // the ledger should show. The rule's own note becomes secondary
+        // detail — description is NOT NULL, so `?? ''` rather than leaving
+        // it undefined (this row's key set must stay uniform with the rest
+        // of the batch; description can't be conditionally omitted here).
+        note: rule.name,
+        description: rule.note ?? '',
         source: 'recurring' as const,
         recurring_rule_id: rule.id,
         occurrence_date: date,

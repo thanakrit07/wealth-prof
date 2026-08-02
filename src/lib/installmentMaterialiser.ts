@@ -76,7 +76,11 @@ export async function materialiseInstallmentsDue(
         kind: 'expense',
         category_id: inst.category_id,
         category_kind: 'expense',
-        description: `${inst.name} (งวดที่ ${n}/${inst.total_periods})`,
+        // note, not description: note is the ledger's primary label (0020).
+        // No description key here — every row in this batch omits it
+        // uniformly, so PostgREST leaves the column to its NOT NULL default
+        // rather than sending an explicit null.
+        note: `${inst.name} (งวดที่ ${n}/${inst.total_periods})`,
         amount: n === inst.total_periods && inst.final_amount != null ? inst.final_amount : inst.monthly_amount,
         owner_id: inst.owner_id,
         from_card_id: cardBilled ? inst.card_id : null,

@@ -229,7 +229,7 @@ create table transactions (
   kind          transaction_kind not null,
   category_id   uuid references categories(id),       -- required for income/expense, null for transfer
   category_kind category_kind,                        -- denormalised for fast queries; kept honest by the FK below
-  description   text not null default '',
+  description   text not null default '',              -- secondary detail (v3.2: was primary until migration 0020)
   amount        numeric(14,2) not null check (amount > 0),
   owner_id      uuid references household_members(id),
 
@@ -239,7 +239,7 @@ create table transactions (
   to_account_id   uuid references accounts(id),
   to_card_id      uuid references cards(id),
 
-  note          text,
+  note          text,                                  -- primary ledger label (v3.2, migration 0020); UI falls back to category name
   source        transaction_source not null default 'manual',
   recurring_rule_id uuid references recurring_rules(id) on delete set null,
   occurrence_date   date,                             -- the scheduled date this instance came from
@@ -658,8 +658,8 @@ The v2 quick-add (amount-first with the system numpad auto-opening over a scroll
 ```
 
 1. **A stacked field form on top, one fixed picker panel below.** Tapping a field row swaps the panel's content; the form itself never moves or scrolls. The panel is part of the sheet, not an overlay, so the form rows stay visible and tappable the whole time.
-2. **The amount keypad is in-app** — digits plus `+ − × ÷ =`, so quick arithmetic ("120+85+60") happens inline, and the **system keyboard never opens for the amount**. This is the durable fix for the iOS viewport-shove bug; the system keyboard appears only for note/description, which sit last so nothing else needs reaching while it is up.
-3. **Category panel is the D10 two-level grid**: main categories ordered by frequency of use; a main with subs expands them in place (Money Manager's chevron pattern); a main without subs selects immediately. Long-press → manage categories.
+2. **The amount keypad is in-app** — digits plus `+ − × ÷ =`, so quick arithmetic ("120+85+60") happens inline, and the **system keyboard never opens for the amount**. This is the durable fix for the iOS viewport-shove bug; the system keyboard appears only for details/note, which sit last so nothing else needs reaching while it is up. *(v3.2)* **Note is the primary label** — always visible, last field, and what the ledger shows; **Details (formerly Description) is secondary** — free text behind "+ Add details", collapsed unless already filled in. Installment periods and recurring rules write their generated label to note, so a plan's own memo (if any) survives as details rather than being overwritten.
+3. **Category panel is the D10 two-level grid**: main categories ordered by the arrangement set in Manage categories (drag order), not by usage frequency — usage counts only drive the smart instrument default. A main with subs expands them in place directly under the row that holds it (Money Manager's chevron pattern); a main without subs selects immediately. Long-press → manage categories.
 4. **Rep/Inst. lives on the form** (next to the date, as in Money Manager): one control that turns the entry into a recurring rule ("repeat") or an installment plan ("instalment", asking only periods + optional final amount) with everything already typed carried over. No separate screens to start from.
 5. Smart defaults unchanged: date = today, kind = expense, owner = the logged-in person, instrument = last used with that category. Save → optimistic update with undo in the toast.
 
@@ -673,7 +673,7 @@ Transfers swap the category panel for a from/to instrument picker, as before. Ca
   1. Monthly cash-flow summary (income/expense/net) and the by-person split, as before.
   2. **Card bills due in month M**: one row per active card showing the billing cycle **whose due date falls in M** — cycle range label ("20 Jul – 19 Aug"), `cycleBill` total (with the §6.1 double-count guard), due date, and a paid indicator (transfers to the card inside the cycle vs. the bill). Header total = "cash to prepare for cards this month". Viewing next month answers "เดือนหน้าต้องเตรียมเท่าไหร่". Tapping a row opens the card statement view anchored to that cycle. This replaces the today-anchored "set aside" card, which could not look ahead.
   3. **Spending by category, collapsed by default** (one summary row; tap to expand) and rolled up to **effective mains** (D10): a sub-filed transaction counts under its parent; a main with subs expands inline to its sub breakdown; tapping navigates to Transactions filtered by that category (a main's filter matches its subs' transactions too).
-* **Transactions**: a review strip at the top when unconfirmed recurring rows exist; below it, a list grouped by day. Each row shows category icon, description, instrument, owner colour and amount. Swipe to edit/delete, full-text search. Transfers render with a distinct arrow treatment and are visibly excluded from the totals.
+* **Transactions**: a review strip at the top when unconfirmed recurring rows exist; below it, a list grouped by day. Each row shows category icon, note (falling back to the category name), instrument, owner colour and amount. Swipe to edit/delete, full-text search. Transfers render with a distinct arrow treatment and are visibly excluded from the totals.
 * **Installments**: a card per plan with a progress bar and a red badge for rates ≥5% p.a. *(v3)* Card-billed plans no longer have a pay button — periods post themselves (§6.7) and the row shows "posted through period n/N" instead; account-billed plans surface their due period in the review strip rather than here. Completed plans collapse into a "finished" section.
 * **Accounts**: two sections (accounts and cards) per the baseline. Cards show a mini gauge of used vs. available credit and the next statement/due dates; accounts have a Reconcile button.
   * **Deleting an account or card** *(v3.1)*: swipe-left, then a dialog that asks what happens to its transactions, because both answers are legitimate and destroy different things — a mistyped account should take its rows with it, a bank you have closed has real history worth keeping. Keeping them is safe: `useInstrumentNames` resolves labels from a lookup that **includes deleted rows**, so a past expense still names the account it came from instead of degrading to a generic "Account". Both the instrument and (optionally) its transactions are soft-deleted, so a mistake is recoverable in the database.

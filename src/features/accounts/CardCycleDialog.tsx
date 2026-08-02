@@ -30,7 +30,7 @@ interface Props {
 // Card statement view (DESIGN.md §7.3, D11): transactions grouped by
 // billing cycle, newest first — the in-app version of the old sheet's
 // per-cycle summary. Auto-posted installment periods (InstallmentMaterialiser)
-// sit in the same list as manual spends, tagged by their own description
+// sit in the same list as manual spends, tagged by their own note
 // ("Notebook (4/10)"), so the list reads like the issuer's statement.
 export function CardCycleDialog({ card, initialDate, onClose }: Props) {
   const { householdId } = useHousehold()
@@ -138,7 +138,7 @@ export function CardCycleDialog({ card, initialDate, onClose }: Props) {
             {chargeRows.map((t) => (
               <li key={t.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
                 <CategoryIcon icon={categoryById.get(t.category_id ?? '')?.icon ?? null} color={categoryById.get(t.category_id ?? '')?.color} className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{t.description || categoryById.get(t.category_id ?? '')?.name || t.kind}</span>
+                <span className="min-w-0 flex-1 truncate">{t.note || categoryById.get(t.category_id ?? '')?.name || t.kind}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{dayMonthLabel(t.date)}</span>
                 <span className="shrink-0 font-medium">{formatBaht(t.amount)}</span>
               </li>

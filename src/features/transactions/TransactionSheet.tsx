@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRightLeft, ChevronDown, MoreHorizontal, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -67,11 +67,13 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const [note, setNote] = useState(transaction?.note ?? '')
 
   // Progressive disclosure (DESIGN.md §7.2): the grid starts at 2 rows,
-  // owner/date collapse into a one-line summary, and description/note are
-  // hidden unless already filled in (when editing) or explicitly opened.
+  // owner/date collapse into a one-line summary, and description (the
+  // secondary "+ Add details" field) is hidden unless already filled in
+  // (when editing) or explicitly opened. Note is the primary ledger label
+  // (0020) and stays always visible — see the input further down.
   const [gridExpanded, setGridExpanded] = useState(false)
   const [metaOpen, setMetaOpen] = useState(false)
-  const [detailsOpen, setDetailsOpen] = useState(Boolean(transaction?.description || transaction?.note))
+  const [detailsOpen, setDetailsOpen] = useState(Boolean(transaction?.description))
   // Once the user picks an instrument by hand (or is editing an existing
   // row), category taps must stop auto-overriding it.
   const [fromTouched, setFromTouched] = useState(Boolean(transaction))
@@ -106,6 +108,26 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const showAll = gridExpanded || !needsMoreTile || selectionHidden
   const visibleCategories = showAll ? mainCategories : mainCategories.slice(0, COLLAPSED_TILES)
   const expandedSubs = expandedMainId ? subsOf(expandedMainId) : []
+
+  // One flat tile list so "More" takes part in row arithmetic like any other
+  // tile — otherwise the sub tray lands under the wrong line whenever the
+  // grid is collapsed.
+  type Tile = { kind: 'main'; category: Category } | { kind: 'more' }
+  const tiles: Tile[] = [
+    ...visibleCategories.map((category): Tile => ({ kind: 'main', category })),
+    ...(showAll ? [] : ([{ kind: 'more' }] as Tile[])),
+  ]
+
+  // D10: the sub tray goes right after the last tile of the row holding the
+  // tapped main, not after the whole grid, so it reads as belonging to that
+  // row instead of appearing a full row away.
+  const expandedTileIndex = tiles.findIndex((t) => t.kind === 'main' && t.category.id === expandedMainId)
+  const subRowAfter =
+    expandedSubs.length === 0
+      ? -1
+      : expandedTileIndex < 0
+        ? tiles.length - 1
+        : Math.min(Math.floor(expandedTileIndex / 4) * 4 + 3, tiles.length - 1)
 
   const ownerLabel = ownerId ? (members.find((m) => m.id === ownerId)?.display_name ?? 'Shared') : 'Shared'
   const dateLabel = date === today() ? 'Today' : date
@@ -193,7 +215,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           <DrawerTitle>{transaction ? 'Edit transaction' : 'Add transaction'}</DrawerTitle>
         </DrawerHeader>
 
-        <div className="space-y-4 px-4 pb-4">
+        <div className="space-y-3 px-4 pb-4">
           <AmountField size="lg" expr={amountField.expr} active={keypadOpen} onActivate={() => setKeypadOpen(true)} />
 
           <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
@@ -211,73 +233,80 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           </Tabs>
 
           {kind !== 'transfer' ? (
-            <>
-              <div className="grid grid-cols-4 gap-2">
-                {visibleCategories.map((c) => {
-                  const subs = subsOf(c.id)
-                  const hasSubs = subs.length > 0
-                  const isExpandedMain = expandedMainId === c.id
-                  return (
-                    <button
-                      key={c.id}
-                      // Selecting the main is always enough to save; the subs
-                      // just open alongside as an optional refinement, so a
-                      // main with children is never a dead end.
-                      onClick={() => {
-                        selectCategory(c)
-                        setExpandedMainId(hasSubs && !isExpandedMain ? c.id : null)
-                      }}
-                      className={cn(
-                        'relative flex flex-col items-center gap-1 rounded-lg border p-2 text-xs',
-                        categoryId === c.id
-                          ? 'border-primary bg-primary/10'
-                          : isExpandedMain
-                            ? 'border-primary/40'
-                            : 'border-border',
-                      )}
-                    >
-                      <CategoryIcon icon={c.icon} color={c.color} className="size-5" />
-                      <span className="w-full truncate text-center">{c.name}</span>
-                      {hasSubs && (
-                        <ChevronDown
-                          className={cn(
-                            'absolute top-1 right-1 size-3 text-muted-foreground transition-transform',
-                            isExpandedMain && 'rotate-180',
-                          )}
-                        />
-                      )}
-                    </button>
-                  )
-                })}
-                {!showAll && (
-                  <button
-                    onClick={() => setGridExpanded(true)}
-                    className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border p-2 text-xs text-muted-foreground"
-                  >
-                    <MoreHorizontal className="size-5" />
-                    <span>More</span>
-                  </button>
-                )}
-              </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {tiles.map((tile, i) => {
+                const c = tile.kind === 'main' ? tile.category : null
+                const hasSubs = c ? subsOf(c.id).length > 0 : false
+                const isExpandedMain = c != null && expandedMainId === c.id
+                const showTrayAfter = i === subRowAfter
+                return (
+                  <Fragment key={c ? c.id : '__more__'}>
+                    {c ? (
+                      <button
+                        // Selecting the main is always enough to save; the
+                        // subs just open alongside as an optional refinement,
+                        // so a main with children is never a dead end.
+                        onClick={() => {
+                          selectCategory(c)
+                          setExpandedMainId(hasSubs && !isExpandedMain ? c.id : null)
+                        }}
+                        className={cn(
+                          'relative flex flex-col items-center gap-0.5 rounded-lg border px-1 py-1.5 text-[11px] leading-tight',
+                          categoryId === c.id
+                            ? 'border-primary bg-primary/10'
+                            : isExpandedMain
+                              ? 'border-primary/40'
+                              : 'border-border',
+                          isExpandedMain && showTrayAfter && 'rounded-b-none border-b-transparent',
+                        )}
+                      >
+                        <CategoryIcon icon={c.icon} color={c.color} className="size-4.5" />
+                        <span className="w-full truncate text-center">{c.name}</span>
+                        {hasSubs && (
+                          <ChevronDown
+                            className={cn(
+                              'absolute top-0.5 right-0.5 size-3 text-muted-foreground transition-transform',
+                              isExpandedMain && 'rotate-180',
+                            )}
+                          />
+                        )}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setGridExpanded(true)}
+                        className="flex flex-col items-center gap-0.5 rounded-lg border border-dashed border-border px-1 py-1.5 text-[11px] leading-tight text-muted-foreground"
+                      >
+                        <MoreHorizontal className="size-4.5" />
+                        <span>More</span>
+                      </button>
+                    )}
 
-              {expandedSubs.length > 0 && (
-                <div className="grid grid-cols-4 gap-2 rounded-lg bg-muted/50 p-2">
-                  {expandedSubs.map((sub) => (
-                    <button
-                      key={sub.id}
-                      onClick={() => selectCategory(sub)}
-                      className={cn(
-                        'flex flex-col items-center gap-1 rounded-lg border bg-background p-2 text-xs',
-                        categoryId === sub.id ? 'border-primary bg-primary/10' : 'border-border',
-                      )}
-                    >
-                      <CategoryIcon icon={sub.icon} color={sub.color} className="size-4" />
-                      <span className="w-full truncate text-center">{sub.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
+                    {showTrayAfter && (
+                      // -mt-1.5 cancels the grid gap so the tray butts against
+                      // the row above; the matching accent border keeps it
+                      // reading as attached to the tapped main rather than a
+                      // new row of peers (D10 — sub categories shown close to
+                      // their parent).
+                      <div className="col-span-4 -mt-1.5 grid grid-cols-4 gap-1.5 rounded-lg rounded-t-none border border-t-0 border-primary/40 bg-muted/50 p-1.5">
+                        {expandedSubs.map((sub) => (
+                          <button
+                            key={sub.id}
+                            onClick={() => selectCategory(sub)}
+                            className={cn(
+                              'flex flex-col items-center gap-0.5 rounded-lg border bg-background px-1 py-1.5 text-[11px] leading-tight',
+                              categoryId === sub.id ? 'border-primary bg-primary/10' : 'border-border',
+                            )}
+                          >
+                            <CategoryIcon icon={sub.icon} color={sub.color} className="size-4" />
+                            <span className="w-full truncate text-center">{sub.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </div>
           ) : (
             <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
               <ArrowRightLeft className="size-4" />
@@ -327,6 +356,15 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
             </div>
           )}
 
+          {/* Always open, but no longer required to be the last field: both
+              this and Details sit at the very bottom of the form, so neither
+              one's keyboard ever has something below it to shove (D9,
+              §7.2) — only their order relative to each other changes here. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="txn-note">Note</Label>
+            <Input id="txn-note" value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+
           {!detailsOpen ? (
             <button
               type="button"
@@ -336,16 +374,10 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
               + Add details
             </button>
           ) : (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="txn-description">Description (optional)</Label>
-                <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="txn-note">Note (optional)</Label>
-                <Input id="txn-note" value={note} onChange={(e) => setNote(e.target.value)} />
-              </div>
-            </>
+            <div className="space-y-1.5">
+              <Label htmlFor="txn-description">Details (optional)</Label>
+              <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
           )}
         </div>
 

@@ -151,7 +151,7 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
                   const title =
                     t.kind === 'transfer'
                       ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
-                      : t.description || category?.name || t.kind
+                      : t.note || category?.name || t.kind
                   // Category only repeats below when it isn't already the title.
                   const details = [category?.name === title ? null : category?.name, instrumentLabel(t, 'from'), owner?.display_name]
                     .filter(Boolean)

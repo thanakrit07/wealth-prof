@@ -112,7 +112,11 @@ async function main() {
     accounts: await existingByKey('accounts', 'name'),
     cards: await existingByKey('cards', 'name'),
     installments: await existingByKey('installments', 'name'),
-    transactions: await existingByKey('transactions', 'description'),
+    // note, not description: since 0020 note is the primary label the
+    // ledger shows, and description holds only secondary detail (often
+    // empty) — using description here would starve the REORDERED guard of
+    // a real name to compare against.
+    transactions: await existingByKey('transactions', 'note'),
   }
 
   /**
@@ -349,7 +353,9 @@ async function main() {
       const sourceKey = `transactions:${i}`
       try {
         const date = parseDate(pick(row, ['date', 'transaction date', 'วันที่']))
-        const description = pick(row, ['description', 'รายละเอียด', 'note'])
+        // "label" because this CSV cell becomes the DB's `note` column — the
+        // sheet's user-facing detail is the ledger's primary label (0020).
+        const label = pick(row, ['description', 'รายละเอียด', 'note'])
         const incomeAmount = parseNumber(pick(row, ['income', 'income amount', 'รายรับ']))
         const expenseAmount = parseNumber(pick(row, ['expense', 'expense amount', 'รายจ่าย']))
         const accountName = pick(row, ['account', 'บัญชี'])
@@ -362,7 +368,7 @@ async function main() {
         // D7: a payment against a card is a transfer, not an expense —
         // otherwise it double-counts against the card's own purchases.
         const looksLikeCardPayment =
-          /จ่ายบัตร|payment|ชำระ/i.test(description) && cardIdByName.has(categoryName.trim().toLowerCase())
+          /จ่ายบัตร|payment|ชำระ/i.test(label) && cardIdByName.has(categoryName.trim().toLowerCase())
 
         const kind = looksLikeCardPayment ? 'transfer' : incomeAmount > 0 ? 'income' : 'expense'
         const amount = kind === 'income' ? incomeAmount : expenseAmount || incomeAmount
@@ -373,7 +379,7 @@ async function main() {
           source: 'import',
           date,
           kind,
-          description,
+          note: label || null,
           amount,
           owner_id: owner,
           from_account_id: instrument.accountId,
@@ -395,20 +401,20 @@ async function main() {
             `transaction row ${i}: category "${categoryName}" does not exist — it will import silently as "Other".`,
           )
         }
-        const clash = installmentNames.find((n) => n && description.toLowerCase().includes(n.toLowerCase()))
+        const clash = installmentNames.find((n) => n && label.toLowerCase().includes(n.toLowerCase()))
         if (clash) {
           summary.warnings.push(
-            `transaction row ${i} ("${description}") looks like a period of installment "${clash}", which the app ` +
+            `transaction row ${i} ("${label}") looks like a period of installment "${clash}", which the app ` +
               `posts by itself — importing it too would double-count the charge. Remove it from transactions.csv.`,
           )
         }
 
-        await save('transactions', sourceKey, row_, description)
+        await save('transactions', sourceKey, row_, label)
         summary.transactions.ok++
 
         // Flag likely-recurring items for the user to review manually
         // (DESIGN §9 — the import never creates rules silently).
-        if (/salary|เงินเดือน|insurance|ประกัน|netflix|subscription/i.test(`${description} ${categoryName}`)) {
+        if (/salary|เงินเดือน|insurance|ประกัน|netflix|subscription/i.test(`${label} ${categoryName}`)) {
           suggestedRecurring.push(row)
         }
       } catch (err) {

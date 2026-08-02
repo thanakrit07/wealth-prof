@@ -12,7 +12,7 @@ export const PERSIST_MAX_AGE = 1000 * 60 * 60 * 24 * 7 // 7 days
  * read a rehydrated `{}` as a Set. Busting drops the persisted cache once;
  * everything refetches from Supabase.
  */
-export const PERSIST_BUSTER = 'v2-posted-periods'
+export const PERSIST_BUSTER = 'v3-note-primary'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
