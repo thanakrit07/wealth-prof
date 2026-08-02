@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import type { Tab } from '@/components/layout/AppShell'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { ErrorScreen } from '@/components/ErrorScreen'
 import { AuthScreen } from './components/AuthScreen'
 import { HouseholdSetup } from './components/HouseholdSetup'
 import { ResetPasswordScreen } from './components/ResetPasswordScreen'
@@ -65,7 +67,25 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
         onTabChange={(t) => setTab(t)}
         onQuickAdd={() => setQuickAddOpen(true)}
       >
-        {screens[tab as Tab] ?? screens.home}
+        {/* Inside the shell, so a screen that throws leaves the bottom nav
+            usable — tapping any other tab is itself the recovery, and the
+            resetKeys below clear the error when it happens. */}
+        <ErrorBoundary
+          resetKeys={[tab]}
+          fallback={(error, reset) => (
+            <ErrorScreen
+              error={error}
+              variant="inline"
+              onRetry={reset}
+              onGoHome={() => {
+                setTab('transactions')
+                reset()
+              }}
+            />
+          )}
+        >
+          {screens[tab as Tab] ?? screens.home}
+        </ErrorBoundary>
       </AppShell>
       <TransactionSheet open={quickAddOpen} onOpenChange={setQuickAddOpen} />
     </HouseholdProvider>
@@ -118,7 +138,14 @@ function App() {
     return <HouseholdSetup onCreated={setMember} inviteCode={inviteCode} />
   }
 
-  return <SignedInApp self={member} />
+  // Outer net for anything the per-tab boundary can't catch (the shell, the
+  // providers, a materialiser). Nothing of the app is left to navigate with
+  // here, so recovery is a reload at the bare path.
+  return (
+    <ErrorBoundary fallback={(error) => <ErrorScreen error={error} variant="screen" />}>
+      <SignedInApp self={member} />
+    </ErrorBoundary>
+  )
 }
 
 export default App
