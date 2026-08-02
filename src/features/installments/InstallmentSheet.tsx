@@ -62,10 +62,14 @@ export function InstallmentSheet({ installment, onClose }: Props) {
     .filter((c) => c.parent_id === null)
     .flatMap((main) => [main, ...flatExpenseCategories.filter((c) => c.parent_id === main.id)])
 
+  // Category is required, not a nicety: every period posts as an expense, and
+  // transactions' category_iff_not_transfer check rejects an expense with no
+  // category — so a plan saved without one silently never posts.
   const canSave =
     name.trim().length > 0 &&
     Number(totalPeriods) > 0 &&
     monthlyAmount.value > 0 &&
+    categoryId != null &&
     Boolean(instrument.accountId || instrument.cardId)
 
   async function handleSave() {
@@ -116,9 +120,9 @@ export function InstallmentSheet({ installment, onClose }: Props) {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Category (optional)</Label>
+            <Label>Category</Label>
             <Select value={categoryId ?? ''} onValueChange={setCategoryId}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Choose a category" /></SelectTrigger>
               <SelectContent>
                 {expenseCategories.map((c) => (
                   <SelectItem key={c.id} value={c.id}>{c.parent_id ? `↳ ${c.name}` : c.name}</SelectItem>

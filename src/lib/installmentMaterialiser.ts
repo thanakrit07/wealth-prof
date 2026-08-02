@@ -52,9 +52,20 @@ export async function materialiseInstallmentsDue(
 
   const postedSet = new Set((existing ?? []).map((t) => t.source_key as string))
 
-  const rows: Record<string, unknown>[] = []
+  let posted = 0
   for (const inst of active) {
     const cardBilled = Boolean(inst.card_id)
+
+    // An expense must carry a category (transactions' category_iff_not_transfer
+    // check), but a plan can be saved without one. Skipping the plan keeps a
+    // single un-categorised plan from failing the batch and stalling posting
+    // for every other plan — which is exactly what happened in production.
+    if (!inst.category_id) {
+      console.warn(`Installment "${inst.name}" has no category; its periods cannot post until one is set.`)
+      continue
+    }
+
+    const rows: Record<string, unknown>[] = []
     for (let n = 1; n <= inst.total_periods; n++) {
       const sourceKey = periodSourceKey(inst.id, n)
       if (postedSet.has(sourceKey)) continue
@@ -64,7 +75,7 @@ export async function materialiseInstallmentsDue(
         date: periodDate(inst.start_date, n),
         kind: 'expense',
         category_id: inst.category_id,
-        category_kind: inst.category_id ? 'expense' : null,
+        category_kind: 'expense',
         description: `${inst.name} (งวดที่ ${n}/${inst.total_periods})`,
         amount: n === inst.total_periods && inst.final_amount != null ? inst.final_amount : inst.monthly_amount,
         owner_id: inst.owner_id,
@@ -78,16 +89,22 @@ export async function materialiseInstallmentsDue(
         confirmed: true,
       })
     }
+
+    if (rows.length === 0) continue
+
+    // Per plan, not one batch for all: a row Postgres refuses aborts the whole
+    // statement, so batching every plan together lets one bad plan block
+    // posting for all of them. upsert-ignore rather than insert because a
+    // period may have been posted by the other device mid-run.
+    const { error } = await supabase
+      .from('transactions')
+      .upsert(rows, { onConflict: 'household_id,source_key', ignoreDuplicates: true })
+    if (error) {
+      console.error(`Could not post periods for installment "${inst.name}"`, error)
+      continue
+    }
+    posted += rows.length
   }
 
-  if (rows.length === 0) return 0
-
-  // upsert-ignore rather than insert: a plain insert of the whole batch
-  // aborts entirely if any single row lost a race with another device.
-  const { error } = await supabase
-    .from('transactions')
-    .upsert(rows, { onConflict: 'household_id,source_key', ignoreDuplicates: true })
-  if (error) throw error
-
-  return rows.length
+  return posted
 }
