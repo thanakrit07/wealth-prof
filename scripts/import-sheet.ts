@@ -2,6 +2,7 @@
 // of four tabs: Accounts, Credit Card, Installment, Transactions.
 //
 // Usage:
+//   npx tsx scripts/import-sheet.ts --dir ./import-data --dry-run   (writes nothing)
 //   npx tsx scripts/import-sheet.ts --dir ./import-data
 //
 // Required env vars (put in .env.local, already used by the app):
@@ -17,6 +18,11 @@
 // (unique per household, migration 0013); re-running updates matching rows
 // and inserts new ones without ever clearing existing data.
 //
+// --dry-run resolves and validates every row exactly as a real run would,
+// reports what it would insert vs update, and writes nothing. Run it first:
+// it is the only way to catch a reordered sheet before the upsert overwrites
+// the wrong record in place (see `save`).
+//
 // IMPORTANT: the exact column headers in your CSV exports are not yet
 // known. `pick()` (scripts/csv.ts) tries several plausible header
 // spellings per field — if a column comes back empty in the summary,
@@ -30,16 +36,17 @@ import { periodDate } from '../src/lib/finance/billingCycle.ts'
 
 interface Args {
   dir: string
+  dryRun: boolean
 }
 
 function parseArgs(): Args {
   const dirFlagIndex = process.argv.indexOf('--dir')
   const dir = dirFlagIndex >= 0 ? process.argv[dirFlagIndex + 1] : './import-data'
-  return { dir }
+  return { dir, dryRun: process.argv.includes('--dry-run') }
 }
 
 async function main() {
-  const { dir } = parseArgs()
+  const { dir, dryRun } = parseArgs()
   const url = process.env.VITE_SUPABASE_URL
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY
   const email = process.env.IMPORT_EMAIL
@@ -78,6 +85,70 @@ async function main() {
     installments: { ok: 0, failed: 0, payments: 0 },
     transactions: { ok: 0, failed: 0 },
     failures: [] as string[],
+    inserts: 0,
+    updates: 0,
+    /** Things that will import "successfully" but not mean what you wanted. */
+    warnings: [] as string[],
+  }
+
+  // What source_keys already exist, so a dry run can say insert vs update —
+  // and, more importantly, catch a source_key whose meaning has shifted.
+  async function existingByKey(table: string, nameColumn: string) {
+    const { data } = await supabase
+      .from(table)
+      .select(`id, source_key, ${nameColumn}`)
+      .eq('household_id', householdId)
+      .not('source_key', 'is', null)
+    const map = new Map<string, { id: string; name: string }>()
+    // Cast via unknown: the select list is built at runtime, so supabase-js
+    // cannot infer a row type from it.
+    for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
+      map.set(row.source_key as string, { id: row.id as string, name: String(row[nameColumn] ?? '') })
+    }
+    return map
+  }
+
+  const existing = {
+    accounts: await existingByKey('accounts', 'name'),
+    cards: await existingByKey('cards', 'name'),
+    installments: await existingByKey('installments', 'name'),
+    transactions: await existingByKey('transactions', 'description'),
+  }
+
+  /**
+   * Writes the row, or in a dry run reports what the write would do.
+   *
+   * source_key is the CSV row *index*, so it only keeps meaning while row
+   * order does. If a key already belongs to a differently-named record, the
+   * sheet has been reordered and this upsert would overwrite the wrong row
+   * in place — same id, so everything stays linked to it while its identity
+   * silently changes. That is the loudest thing a dry run can tell you.
+   */
+  async function save(
+    table: keyof typeof existing,
+    sourceKey: string,
+    row: Record<string, unknown>,
+    incomingName: string,
+  ): Promise<string> {
+    const prior = existing[table].get(sourceKey)
+    if (prior && incomingName && prior.name && prior.name.trim().toLowerCase() !== incomingName.trim().toLowerCase()) {
+      summary.warnings.push(
+        `REORDERED: ${table} "${sourceKey}" is currently "${prior.name}" but this row is "${incomingName}" — ` +
+          `re-running would overwrite the existing record in place. Restore the sheet's original row order.`,
+      )
+    }
+    if (prior) summary.updates++
+    else summary.inserts++
+
+    if (dryRun) return prior?.id ?? `dry:${sourceKey}`
+
+    const { data, error } = await supabase
+      .from(table)
+      .upsert(row, { onConflict: 'household_id,source_key' })
+      .select('id')
+      .single()
+    if (error) throw error
+    return data.id as string
   }
 
   function resolveOwner(name: string): string | null {
@@ -104,24 +175,27 @@ async function main() {
         const balance = parseNumber(pick(row, ['balance', 'ยอดคงเหลือ', 'current balance']))
         if (!name) throw new Error('missing name')
 
-        const { data, error } = await supabase
-          .from('accounts')
-          .upsert(
-            {
-              household_id: householdId,
-              source_key: sourceKey,
-              name,
-              type,
-              owner_id: owner,
-              anchor_balance: balance,
-              anchor_date: new Date().toISOString().slice(0, 10),
-            },
-            { onConflict: 'household_id,source_key' },
+        if (existing.accounts.has(sourceKey)) {
+          summary.warnings.push(
+            `accounts "${name}": re-importing resets the balance anchor to ${balance} dated today, ` +
+              `discarding any reconciliation. Skip accounts.csv unless that is what you want.`,
           )
-          .select('id')
-          .single()
-        if (error) throw error
-        accountIdByName.set(name.trim().toLowerCase(), data.id as string)
+        }
+        const id = await save(
+          'accounts',
+          sourceKey,
+          {
+            household_id: householdId,
+            source_key: sourceKey,
+            name,
+            type,
+            owner_id: owner,
+            anchor_balance: balance,
+            anchor_date: new Date().toISOString().slice(0, 10),
+          },
+          name,
+        )
+        accountIdByName.set(name.trim().toLowerCase(), id)
         summary.accounts.ok++
       } catch (err) {
         summary.accounts.failed++
@@ -149,26 +223,23 @@ async function main() {
         const owner = resolveOwner(pick(row, ['owner', 'เจ้าของ', 'person']))
         if (!name) throw new Error('missing name')
 
-        const { data, error } = await supabase
-          .from('cards')
-          .upsert(
-            {
-              household_id: householdId,
-              source_key: sourceKey,
-              name,
-              credit_limit: creditLimit,
-              statement_day: statementDay,
-              due_day: dueDay,
-              annual_interest_rate: annualRate,
-              owner_id: owner,
-            },
-            { onConflict: 'household_id,source_key' },
-          )
-          .select('id')
-          .single()
-        if (error) throw error
-        cardIdBySourceKey.set(sourceKey, data.id as string)
-        cardIdByName.set(name.trim().toLowerCase(), data.id as string)
+        const id = await save(
+          'cards',
+          sourceKey,
+          {
+            household_id: householdId,
+            source_key: sourceKey,
+            name,
+            credit_limit: creditLimit,
+            statement_day: statementDay,
+            due_day: dueDay,
+            annual_interest_rate: annualRate,
+            owner_id: owner,
+          },
+          name,
+        )
+        cardIdBySourceKey.set(sourceKey, id)
+        cardIdByName.set(name.trim().toLowerCase(), id)
         summary.cards.ok++
       } catch (err) {
         summary.cards.failed++
@@ -190,6 +261,10 @@ async function main() {
 
   // --- Installments -----------------------------------------------------
   const suggestedRecurring: CsvRow[] = []
+  // Every active plan's periods are posted as transactions by the app itself,
+  // so the same charge appearing in transactions.csv is a duplicate under a
+  // different source_key — nothing dedupes it. Collected here to check for.
+  const installmentNames: string[] = []
   try {
     const rows = readCsv(`${dir}/installment.csv`)
     for (const [i, row] of rows.entries()) {
@@ -210,38 +285,50 @@ async function main() {
         if (!name || !startDate || !totalPeriods || !monthlyAmount) throw new Error('missing required field')
         if (!instrument.accountId && !instrument.cardId) throw new Error(`unresolved instrument "${instrumentName}"`)
 
-        const { data, error } = await supabase
-          .from('installments')
-          .upsert(
-            {
-              household_id: householdId,
-              source_key: sourceKey,
-              name,
-              category_id: categoryId,
-              start_date: startDate,
-              total_periods: totalPeriods,
-              monthly_amount: monthlyAmount,
-              account_id: instrument.accountId,
-              card_id: instrument.cardId,
-              annual_interest_rate: annualRate,
-              is_cash_advance: isCashAdvance,
-              owner_id: owner,
-              note: note || null,
-              status: periodsPaid >= totalPeriods ? 'done' : 'active',
-            },
-            { onConflict: 'household_id,source_key' },
+        // No category means the plan imports looking fine and then never
+        // posts a period: the materialiser skips it, because an expense with
+        // no category violates transactions' category_iff_not_transfer check.
+        if (!categoryId) {
+          summary.warnings.push(
+            `installment "${name}": no category matched — the plan will import but none of its ` +
+              `${totalPeriods} periods will ever post. Set a category that exists, or fix it in the app after.`,
           )
-          .select('id')
-          .single()
-        if (error) throw error
+        }
+        installmentNames.push(name)
+
+        const id = await save(
+          'installments',
+          sourceKey,
+          {
+            household_id: householdId,
+            source_key: sourceKey,
+            name,
+            category_id: categoryId,
+            start_date: startDate,
+            total_periods: totalPeriods,
+            monthly_amount: monthlyAmount,
+            account_id: instrument.accountId,
+            card_id: instrument.cardId,
+            annual_interest_rate: annualRate,
+            is_cash_advance: isCashAdvance,
+            owner_id: owner,
+            note: note || null,
+            status: periodsPaid >= totalPeriods ? 'done' : 'active',
+          },
+          name,
+        )
         summary.installments.ok++
 
         for (let periodNo = 1; periodNo <= periodsPaid; periodNo++) {
           const paidDate = periodDate(startDate, periodNo)
+          if (dryRun) {
+            summary.installments.payments++
+            continue
+          }
           const { error: paymentError } = await supabase
             .from('installment_payments')
             .upsert(
-              { household_id: householdId, installment_id: data.id, period_no: periodNo, paid_date: paidDate },
+              { household_id: householdId, installment_id: id, period_no: periodNo, paid_date: paidDate },
               { onConflict: 'installment_id,period_no' },
             )
           if (!paymentError) summary.installments.payments++
@@ -303,10 +390,20 @@ async function main() {
           row_.to_card_id = toCardId
         }
 
-        const { error } = await supabase
-          .from('transactions')
-          .upsert(row_, { onConflict: 'household_id,source_key' })
-        if (error) throw error
+        if (kind !== 'transfer' && categoryName && !resolveCategory(categoryName, kind as 'income' | 'expense')) {
+          summary.warnings.push(
+            `transaction row ${i}: category "${categoryName}" does not exist — it will import silently as "Other".`,
+          )
+        }
+        const clash = installmentNames.find((n) => n && description.toLowerCase().includes(n.toLowerCase()))
+        if (clash) {
+          summary.warnings.push(
+            `transaction row ${i} ("${description}") looks like a period of installment "${clash}", which the app ` +
+              `posts by itself — importing it too would double-count the charge. Remove it from transactions.csv.`,
+          )
+        }
+
+        await save('transactions', sourceKey, row_, description)
         summary.transactions.ok++
 
         // Flag likely-recurring items for the user to review manually
@@ -323,11 +420,21 @@ async function main() {
     console.warn(`Skipping transactions.csv: ${(err as Error).message}`)
   }
 
-  console.log('\n--- Import summary ---')
+  console.log(dryRun ? '\n--- Dry run: nothing was written ---' : '\n--- Import summary ---')
   console.log(`Accounts:      ${summary.accounts.ok} ok, ${summary.accounts.failed} failed`)
   console.log(`Cards:         ${summary.cards.ok} ok, ${summary.cards.failed} failed`)
   console.log(`Installments:  ${summary.installments.ok} ok, ${summary.installments.failed} failed, ${summary.installments.payments} payments recorded`)
   console.log(`Transactions:  ${summary.transactions.ok} ok, ${summary.transactions.failed} failed`)
+  console.log(`${dryRun ? 'Would insert' : 'Inserted'}: ${summary.inserts}   ${dryRun ? 'would update' : 'updated'}: ${summary.updates}`)
+
+  if (summary.warnings.length > 0) {
+    // Deduplicated: one bad column spelling otherwise repeats per row and
+    // buries the one-off warnings that actually need a decision.
+    const unique = [...new Set(summary.warnings)]
+    console.log(`\n${unique.length} warning(s) — these import "successfully" but not as intended:`)
+    for (const w of unique.slice(0, 50)) console.log(`  ! ${w}`)
+    if (unique.length > 50) console.log(`  … and ${unique.length - 50} more`)
+  }
   if (suggestedRecurring.length > 0) {
     console.log(`\nLikely recurring items found (add as rules manually in Plan → Recurring):`)
     for (const row of suggestedRecurring.slice(0, 20)) {
@@ -337,6 +444,10 @@ async function main() {
   if (summary.failures.length > 0) {
     console.log(`\n${summary.failures.length} rows failed to parse:`)
     for (const f of summary.failures.slice(0, 50)) console.log(`  - ${f}`)
+  }
+
+  if (dryRun) {
+    console.log('\nNothing above was written. Re-run without --dry-run to apply.')
   }
 }
 

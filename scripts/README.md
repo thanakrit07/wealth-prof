@@ -16,7 +16,35 @@ import-data/
   transactions.csv
 ```
 
-## 2. Run it
+## 2. Dry-run first
+
+```bash
+IMPORT_EMAIL=you@example.com IMPORT_PASSWORD=yourpassword npm run import:sheet -- --dir ./import-data --dry-run
+```
+
+Resolves and validates every row exactly as a real run would, then writes
+nothing. It reports what it would insert vs update, plus warnings for the
+failures that would otherwise be silent:
+
+* **REORDERED** — a `source_key` that currently belongs to a differently
+  named record. `source_key` is the CSV row *index*, so it only means
+  anything while row order holds; if the sheet has been reordered, the
+  upsert overwrites the wrong record **in place** (same id, so everything
+  stays linked to it while its identity changes underneath). Fix the row
+  order before running for real.
+* **Installment period already posted by the app** — every active plan's
+  periods are generated as transactions automatically, so the same charge
+  in `transactions.csv` is a duplicate under a different `source_key` and
+  nothing dedupes it. Remove those rows.
+* **Installment with no category** — imports fine, then never posts a
+  single period (an expense with no category is rejected by the database,
+  so the materialiser skips the plan).
+* **Unknown transaction category** — does not fail; lands silently in
+  "Other".
+* **Account balance anchor reset** — re-importing `accounts.csv` overwrites
+  the balance with the CSV value dated today, discarding any reconciliation.
+
+## 3. Run it
 
 ```bash
 IMPORT_EMAIL=you@example.com IMPORT_PASSWORD=yourpassword npm run import:sheet -- --dir ./import-data
@@ -25,7 +53,7 @@ IMPORT_EMAIL=you@example.com IMPORT_PASSWORD=yourpassword npm run import:sheet -
 Runs as your own signed-in account (not an admin bypass), so it can only
 write into your own household.
 
-## 3. Read the summary
+## 4. Read the summary
 
 The script prints ok/failed counts per tab, up to 50 parse failures with
 the reason, and any transaction whose description/category looks like a
