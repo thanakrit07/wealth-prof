@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { ThemeProvider } from 'next-themes'
 import { Toaster } from '@/components/ui/sonner'
-import { PERSIST_MAX_AGE, queryClient, queryPersister } from './lib/queryClient'
+import { PERSIST_BUSTER, PERSIST_MAX_AGE, queryClient, queryPersister } from './lib/queryClient'
 import { registerPwa } from './lib/registerPwa'
 import './index.css'
 import App from './App.tsx'
@@ -16,7 +16,7 @@ createRoot(document.getElementById('root')!).render(
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <PersistQueryClientProvider
         client={queryClient}
-        persistOptions={{ persister: queryPersister, maxAge: PERSIST_MAX_AGE }}
+        persistOptions={{ persister: queryPersister, maxAge: PERSIST_MAX_AGE, buster: PERSIST_BUSTER }}
       >
         <App />
         <Toaster />

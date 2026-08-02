@@ -67,6 +67,15 @@ export function useInstallmentPayments(householdId: string) {
   })
 }
 
+/**
+ * What the query stores: a plain object, because query data is persisted to
+ * localStorage as JSON (see queryClient.ts) and `JSON.stringify(new Set())`
+ * is `{}` — the rehydrated value would have no `.has`.
+ * **Everything a queryFn returns must survive a JSON round-trip.**
+ */
+export type PostedPeriodsData = Record<string, string>
+
+/** What callers get — Set/Map rebuilt per observer by `select`, never persisted. */
 export interface PostedPeriods {
   /** "<installmentId>:<periodNo>" keys — `cycleBill`'s double-count guard. */
   keys: ReadonlySet<string>
@@ -74,7 +83,14 @@ export interface PostedPeriods {
   transactionIdByKey: ReadonlyMap<string, string>
 }
 
-const EMPTY_POSTED: PostedPeriods = { keys: new Set(), transactionIdByKey: new Map() }
+// Module scope so the identity is stable across renders; React Query skips
+// re-running select when neither the data nor the function changed.
+export function toPostedPeriods(data: PostedPeriodsData): PostedPeriods {
+  return {
+    keys: new Set(Object.keys(data)),
+    transactionIdByKey: new Map(Object.entries(data)),
+  }
+}
 
 /**
  * Which periods already exist as transactions.
@@ -86,25 +102,29 @@ const EMPTY_POSTED: PostedPeriods = { keys: new Set(), transactionIdByKey: new M
 export function usePostedPeriods(householdId: string) {
   return useQuery({
     queryKey: ['installment_posted_periods', householdId],
-    queryFn: async (): Promise<PostedPeriods> => {
+    select: toPostedPeriods,
+    queryFn: async (): Promise<PostedPeriodsData> => {
       const { data, error } = await supabase
         .from('v_transactions')
         .select('id, source_key')
         .eq('household_id', householdId)
         .eq('source', 'installment')
       if (error) throw error
-      const keys = new Set<string>()
-      const transactionIdByKey = new Map<string, string>()
+      const transactionIdByKey: PostedPeriodsData = {}
       for (const row of data ?? []) {
         const parsed = parsePeriodSourceKey(row.source_key as string | null)
         if (!parsed) continue
-        const key = `${parsed.installmentId}:${parsed.periodNo}`
-        keys.add(key)
-        transactionIdByKey.set(key, row.id as string)
+        transactionIdByKey[`${parsed.installmentId}:${parsed.periodNo}`] = row.id as string
       }
-      return { keys, transactionIdByKey }
+      return transactionIdByKey
     },
-    initialData: EMPTY_POSTED,
+    // initialData keeps callers from having to handle undefined (they call
+    // .has on every render). initialDataUpdatedAt: 0 is what stops it being
+    // treated as fresh for staleTime — without it the empty set stands for
+    // 30s after load, and cycleBill projects every period on top of the real
+    // transactions it should have suppressed, inflating every card bill.
+    initialData: {},
+    initialDataUpdatedAt: 0,
   })
 }
 

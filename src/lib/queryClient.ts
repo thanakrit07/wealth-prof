@@ -5,6 +5,15 @@ import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persist
 // garbage-collected immediately on load.
 export const PERSIST_MAX_AGE = 1000 * 60 * 60 * 24 * 7 // 7 days
 
+/**
+ * Bump whenever a queryFn's stored shape changes. A cache written by an older
+ * build is restored verbatim, so a shape change without a buster hands stale,
+ * wrongly-shaped data to the new `select` — which is how the Plan tab came to
+ * read a rehydrated `{}` as a Set. Busting drops the persisted cache once;
+ * everything refetches from Supabase.
+ */
+export const PERSIST_BUSTER = 'v2-posted-periods'
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
