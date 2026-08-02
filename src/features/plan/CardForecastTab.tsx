@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCardCycleAdjustments } from '@/lib/cardCycleAdjustments'
 import { useCards } from '@/lib/cards'
-import { cycleBill, cycleDueInMonth } from '@/lib/finance/billingCycle'
+import { cycleBill, cycleDueInMonth, periodDate } from '@/lib/finance/billingCycle'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { useInstallments, usePostedPeriods } from '@/lib/installments'
@@ -12,7 +13,22 @@ import { useRecurringRules } from '@/lib/recurring'
 import { useTransactions } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
 
-const HORIZON_MONTHS = 6
+// The default window straddles today: enough history to check the last few
+// statements against reality, and the forward horizon the tab was built for.
+const PAST_MONTHS = 3
+const FUTURE_MONTHS = 6
+
+/** 'recent' = the rolling window; otherwise a 4-digit year showing Jan–Dec. */
+type ViewWindow = 'recent' | string
+
+function monthsOfYear(year: string): string[] {
+  return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`)
+}
+
+function rollingMonths(): string[] {
+  const first = shiftMonth(currentMonthKey(), -PAST_MONTHS)
+  return Array.from({ length: PAST_MONTHS + 1 + FUTURE_MONTHS }, (_, i) => shiftMonth(first, i))
+}
 
 // Forward calendar for credit cards (DESIGN.md §7.3 Plan): the in-app
 // version of the sheet's per-card-per-cycle table, which SPEC §5 calls its
@@ -33,11 +49,22 @@ export function CardForecastTab() {
 
   const [includeRecurring, setIncludeRecurring] = useState(true)
   const [openMonth, setOpenMonth] = useState<string | null>(currentMonthKey())
+  const [view, setView] = useState<ViewWindow>('recent')
 
-  const months = useMemo(() => {
-    const first = currentMonthKey()
-    return Array.from({ length: HORIZON_MONTHS }, (_, i) => shiftMonth(first, i))
-  }, [])
+  const months = useMemo(() => (view === 'recent' ? rollingMonths() : monthsOfYear(view)), [view])
+
+  // Offered years come from the plans themselves — a plan's first and last
+  // period bound the range where a card bill can exist — so the picker can
+  // always reach every month the forecast has something to say about.
+  const years = useMemo(() => {
+    const now = new Date().getFullYear()
+    const found = new Set<number>([now - 1, now, now + 1])
+    for (const inst of installments ?? []) {
+      found.add(Number(inst.start_date.slice(0, 4)))
+      found.add(Number(periodDate(inst.start_date, inst.total_periods).slice(0, 4)))
+    }
+    return [...found].sort((a, b) => a - b).map(String)
+  }, [installments])
 
   const activeCards = useMemo(() => (cards ?? []).filter((c) => !c.archived), [cards])
 
@@ -90,6 +117,23 @@ export function CardForecastTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        {/* The span, not the mode name — the picker already says the mode,
+            and what's useful here is knowing how far the list actually runs. */}
+        <p className="truncate text-sm text-muted-foreground">
+          {monthLabel(months[0])} – {monthLabel(months[months.length - 1])}
+        </p>
+        <Select value={view} onValueChange={setView}>
+          <SelectTrigger className="w-32 shrink-0" aria-label="Period shown"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="recent">Recent</SelectItem>
+            {years.map((y) => (
+              <SelectItem key={y} value={y}>{y}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       <div className="flex items-center justify-between rounded-xl border bg-card p-3">
         <div className="min-w-0 pr-3">
           <p className="text-sm">Include recurring</p>
@@ -104,6 +148,9 @@ export function CardForecastTab() {
         {rows.map(({ month, cards, total }) => {
           const isOpen = openMonth === month
           const isPeak = total > 0 && total === peak
+          // Past cycles are settled fact; future ones are committed charges
+          // only. Same number, very different meaning — so the list says which.
+          const isPast = month < currentMonthKey()
           return (
             <li key={month} className="overflow-hidden rounded-xl border bg-card">
               <button
@@ -112,6 +159,9 @@ export function CardForecastTab() {
                 className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors active:bg-accent/60"
               >
                 <span className="flex-1 truncate font-medium">{monthLabel(month)}</span>
+                {isPast && total > 0 && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground">actual</span>
+                )}
                 {isPeak && (
                   <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
                     highest
@@ -149,8 +199,8 @@ export function CardForecastTab() {
       {/* pr-20 keeps the text clear of the floating FAB: this tab's content is
           often shorter than the viewport, so it can't just be scrolled out. */}
       <p className="pr-20 text-xs text-muted-foreground">
-        Future months count committed charges only — installment periods and recurring rules. Day-to-day spending
-        that hasn't happened yet is not included.
+        Past months show what was actually charged. Future months count committed charges only — installment
+        periods and recurring rules — so day-to-day spending that hasn't happened yet is not included.
       </p>
     </div>
   )
