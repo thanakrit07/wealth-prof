@@ -3,6 +3,11 @@
 Imports the old Google Sheet into the app (DESIGN.md §9). Upsert, not wipe:
 safe to re-run after fixing a CSV.
 
+Importing recurring rules needs migration `0021_recurring_rule_source_key`
+applied first (`recurring_rules.source_key`, the same stable identity every
+other import target already has) — apply it before the first run against a
+new database.
+
 ## 1. Export four CSVs
 
 From the Google Sheet, export these tabs to CSV and place them in a local
@@ -32,10 +37,28 @@ failures that would otherwise be silent:
   upsert overwrites the wrong record **in place** (same id, so everything
   stays linked to it while its identity changes underneath). Fix the row
   order before running for real.
-* **Installment period already posted by the app** — every active plan's
-  periods are generated as transactions automatically, so the same charge
-  in `transactions.csv` is a duplicate under a different `source_key` and
-  nothing dedupes it. Remove those rows.
+* **Installment rows are skipped automatically** — every active plan's
+  periods are generated as transactions automatically. Rows whose category is
+  `ผ่อนสินค้า`, `Installment`, or `Installments` are never imported from
+  `transactions.csv`, so they cannot duplicate a plan.
+* **Recognised subscriptions become recurring rules** — a row counts as a
+  subscription if its category is literally `Subscription`/`Subscriptions`,
+  *or* its label names a known service (Youtube, Netflix, Spotify, …; see
+  `KNOWN_SUBSCRIPTION_SERVICES` in `importCategories.ts`) — the real export
+  never uses the category value, so label matching is what actually finds
+  Youtube-style charges filed under "Education". A label match alone isn't
+  proof of recurrence, though: rows are grouped by label+owner+instrument
+  first, and only a group with **2 or more** occurrences converts — a single
+  matching row (e.g. a one-off "Google One" purchase) stays an ordinary
+  transaction. Converted groups are folded into one monthly recurring rule
+  (seeded from their earliest occurrence) instead of individual transactions,
+  and a `Subscriptions` expense category is created if none exists.
+  - If every occurrence in a group agreed on the amount, the rule is marked
+    `auto_post` — the app backfills the skipped months as confirmed
+    transactions with no review needed. If the amount ever changed, the rule
+    is marked `variable_amount` instead, so every backfilled (and future)
+    occurrence lands in the review strip rather than freezing a possibly
+    wrong number across every past month.
 * **Installment with no category** — imports fine, then never posts a
   single period (an expense with no category is rejected by the database,
   so the materialiser skips the plan).
@@ -55,11 +78,10 @@ write into your own household.
 
 ## 4. Read the summary
 
-The script prints ok/failed counts per tab, up to 50 parse failures with
-the reason, and any transaction whose description/category looks like a
-recurring item (salary, insurance, subscriptions) — add those as
-recurring rules yourself in Plan → Recurring; the import never creates
-rules silently.
+The script prints ok/failed counts per tab, skipped installment/subscription
+rows, and recurring rules created from the Subscription category. Other
+possible recurring items (salary, insurance, etc.) are still reported for
+manual review.
 
 ## Column headers are a best guess
 
