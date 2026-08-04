@@ -59,7 +59,9 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
     accountId: rule?.to_account_id ?? null,
     cardId: rule?.to_card_id ?? null,
   })
-  const [ownerId, setOwnerId] = useState<string | null>(rule?.owner_id ?? self.id)
+  // Same trap as TransactionSheet: null means "shared" (§4.2), so a nullish
+  // fallback would quietly reassign a shared rule to whoever edits it.
+  const [ownerId, setOwnerId] = useState<string | null>(rule ? rule.owner_id : self.id)
   const [freq, setFreq] = useState<RecurrenceFreq>(rule?.freq ?? 'monthly')
   const [interval, setIntervalValue] = useState(String(rule?.interval ?? 1))
   const [dayOfMonth, setDayOfMonth] = useState(String(rule?.day_of_month ?? 1))

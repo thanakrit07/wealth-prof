@@ -4,6 +4,10 @@
 // Usage:
 //   npx tsx scripts/import-sheet.ts --dir ./import-data --dry-run   (writes nothing)
 //   npx tsx scripts/import-sheet.ts --dir ./import-data
+//   npx tsx scripts/import-sheet.ts --dir ./import-data --debt-from 2026-08-01
+//     (rows on/after this date track member debts normally; everything
+//     older is written debt_exempt so history doesn't open as a wall of
+//     owed money — omit the flag to exempt the whole import)
 //
 // Required env vars (put in .env.local, already used by the app):
 //   VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
@@ -32,21 +36,37 @@
 import { createClient } from '@supabase/supabase-js'
 import { parseInterestRate } from './interestRate.ts'
 import { parseDate, parseNumber, pick, readCsv, type CsvRow } from './csv.ts'
+import {
+  canonicalCategoryName,
+  isInstallmentCategory,
+  isLikelySubscription,
+  subscriptionSourceKey,
+} from './importCategories.ts'
 import { periodDate } from '../src/lib/finance/billingCycle.ts'
 
 interface Args {
   dir: string
   dryRun: boolean
+  debtFrom: string | null
 }
 
 function parseArgs(): Args {
   const dirFlagIndex = process.argv.indexOf('--dir')
   const dir = dirFlagIndex >= 0 ? process.argv[dirFlagIndex + 1] : './import-data'
-  return { dir, dryRun: process.argv.includes('--dry-run') }
+  // Most sheet rows carry no owner (resolveOwner returns null for a blank
+  // cell), which reads as a shared transaction (0022) -- so without this,
+  // every import turns years of history into open debts the moment the
+  // member-debt trigger runs. Rows on or after --debt-from track debts
+  // normally; everything older is written debt_exempt. Omit the flag and
+  // the whole import is exempt -- opt in once you're ready to go live with
+  // debt tracking, rather than opting out row by row after the fact.
+  const debtFromFlagIndex = process.argv.indexOf('--debt-from')
+  const debtFrom = debtFromFlagIndex >= 0 ? process.argv[debtFromFlagIndex + 1] : null
+  return { dir, dryRun: process.argv.includes('--dry-run'), debtFrom }
 }
 
 async function main() {
-  const { dir, dryRun } = parseArgs()
+  const { dir, dryRun, debtFrom } = parseArgs()
   const url = process.env.VITE_SUPABASE_URL
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY
   const email = process.env.IMPORT_EMAIL
@@ -79,11 +99,32 @@ async function main() {
     .eq('household_id', householdId)
   const categoryByName = new Map((categories ?? []).map((c) => [`${c.kind}:${c.name.trim().toLowerCase()}`, c.id as string]))
 
+  async function ensureExpenseCategory(name: string): Promise<string> {
+    const key = `expense:${name.toLowerCase()}`
+    const existingId = categoryByName.get(key)
+    if (existingId) return existingId
+    if (dryRun) {
+      const dryId = `dry:category:${name.toLowerCase()}`
+      categoryByName.set(key, dryId)
+      return dryId
+    }
+    const { data, error } = await supabase
+      .from('categories')
+      .insert({ household_id: householdId, name, kind: 'expense' })
+      .select('id')
+      .single()
+    if (error) throw error
+    const id = data.id as string
+    categoryByName.set(key, id)
+    return id
+  }
+
   const summary = {
     accounts: { ok: 0, failed: 0 },
     cards: { ok: 0, failed: 0 },
     installments: { ok: 0, failed: 0, payments: 0 },
-    transactions: { ok: 0, failed: 0 },
+    transactions: { ok: 0, failed: 0, skippedInstallments: 0, skippedSubscriptions: 0 },
+    recurringRules: { ok: 0, failed: 0 },
     failures: [] as string[],
     inserts: 0,
     updates: 0,
@@ -94,11 +135,16 @@ async function main() {
   // What source_keys already exist, so a dry run can say insert vs update —
   // and, more importantly, catch a source_key whose meaning has shifted.
   async function existingByKey(table: string, nameColumn: string) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from(table)
       .select(`id, source_key, ${nameColumn}`)
       .eq('household_id', householdId)
       .not('source_key', 'is', null)
+    // Surfaced rather than swallowed: a schema mismatch here (e.g. a pending
+    // migration this table needs) would otherwise read as "no existing rows"
+    // and a dry run would report a false-clean result for a real run that's
+    // about to fail.
+    if (error) throw new Error(`Could not read existing ${table} rows — has its migration been applied? ${error.message}`)
     const map = new Map<string, { id: string; name: string }>()
     // Cast via unknown: the select list is built at runtime, so supabase-js
     // cannot infer a row type from it.
@@ -112,6 +158,7 @@ async function main() {
     accounts: await existingByKey('accounts', 'name'),
     cards: await existingByKey('cards', 'name'),
     installments: await existingByKey('installments', 'name'),
+    recurring_rules: await existingByKey('recurring_rules', 'name'),
     // note, not description: since 0020 note is the primary label the
     // ledger shows, and description holds only secondary detail (often
     // empty) — using description here would starve the REORDERED guard of
@@ -162,7 +209,7 @@ async function main() {
 
   function resolveCategory(name: string, kind: 'income' | 'expense'): string | null {
     if (!name) return null
-    return categoryByName.get(`${kind}:${name.trim().toLowerCase()}`) ?? null
+    return categoryByName.get(`${kind}:${canonicalCategoryName(name).trim().toLowerCase()}`) ?? null
   }
 
   // --- Accounts -----------------------------------------------------
@@ -347,20 +394,50 @@ async function main() {
   }
 
   // --- Transactions -----------------------------------------------------
+  //
+  // Subscriptions need two passes, not one. A label match alone isn't proof
+  // of recurrence — a one-off "Netflix gift card" purchase matches the same
+  // way a real monthly charge does — so whether a row becomes a recurring
+  // rule can only be decided after seeing every row for that (name, owner,
+  // instrument) key. Pass 1 parses every row and groups the subscription
+  // candidates; pass 2 uses that grouping to decide, per row, whether to
+  // write an ordinary transaction or fold it into a recurring rule instead.
+  interface ParsedTxnRow {
+    i: number
+    row: CsvRow
+    sourceKey: string
+    date: string
+    label: string
+    categoryName: string
+    owner: string | null
+    accountName: string
+    instrument: { accountId: string | null; cardId: string | null }
+    kind: 'income' | 'expense' | 'transfer'
+    amount: number
+  }
+
+  const parsedRows: ParsedTxnRow[] = []
   try {
     const rows = readCsv(`${dir}/transactions.csv`)
     for (const [i, row] of rows.entries()) {
       const sourceKey = `transactions:${i}`
       try {
-        const date = parseDate(pick(row, ['date', 'transaction date', 'วันที่']))
+        const date = parseDate(pick(row, ['date', 'transaction date', 'วันที่', 'วันที่ทำรายการ', 'วันที่บันทึกรายการ']))
         // "label" because this CSV cell becomes the DB's `note` column — the
         // sheet's user-facing detail is the ledger's primary label (0020).
-        const label = pick(row, ['description', 'รายละเอียด', 'note'])
+        const label = pick(row, ['description', 'รายละเอียด', 'note', 'รายการ'])
         const incomeAmount = parseNumber(pick(row, ['income', 'income amount', 'รายรับ']))
         const expenseAmount = parseNumber(pick(row, ['expense', 'expense amount', 'รายจ่าย']))
         const accountName = pick(row, ['account', 'บัญชี'])
         const owner = resolveOwner(pick(row, ['owner', 'person', 'เจ้าของ']))
         const categoryName = pick(row, ['category', 'หมวดหมู่'])
+        if (isInstallmentCategory(categoryName)) {
+          // Installment periods are materialised by the app from
+          // installment.csv. Never import the legacy ledger copy as a second
+          // transaction, regardless of whether its label matches the plan.
+          summary.transactions.skippedInstallments++
+          continue
+        }
         const instrument = resolveInstrument(accountName)
         if (!date) throw new Error('missing/unparseable date')
         if (!instrument.accountId && !instrument.cardId) throw new Error(`unresolved instrument "${accountName}"`)
@@ -373,50 +450,7 @@ async function main() {
         const kind = looksLikeCardPayment ? 'transfer' : incomeAmount > 0 ? 'income' : 'expense'
         const amount = kind === 'income' ? incomeAmount : expenseAmount || incomeAmount
 
-        const row_: Record<string, unknown> = {
-          household_id: householdId,
-          source_key: sourceKey,
-          source: 'import',
-          date,
-          kind,
-          note: label || null,
-          amount,
-          owner_id: owner,
-          from_account_id: instrument.accountId,
-          from_card_id: instrument.cardId,
-        }
-        if (kind !== 'transfer') {
-          // Sheet rows left without a category still need one (category_id is
-          // required for income/expense); fall back to "Other" rather than
-          // dropping a real transaction, and let the user re-tag it later.
-          row_.category_id = resolveCategory(categoryName, kind as 'income' | 'expense') ?? resolveCategory('Other', kind as 'income' | 'expense')
-          row_.category_kind = kind
-        } else {
-          const toCardId = cardIdByName.get(categoryName.trim().toLowerCase()) ?? null
-          row_.to_card_id = toCardId
-        }
-
-        if (kind !== 'transfer' && categoryName && !resolveCategory(categoryName, kind as 'income' | 'expense')) {
-          summary.warnings.push(
-            `transaction row ${i}: category "${categoryName}" does not exist — it will import silently as "Other".`,
-          )
-        }
-        const clash = installmentNames.find((n) => n && label.toLowerCase().includes(n.toLowerCase()))
-        if (clash) {
-          summary.warnings.push(
-            `transaction row ${i} ("${label}") looks like a period of installment "${clash}", which the app ` +
-              `posts by itself — importing it too would double-count the charge. Remove it from transactions.csv.`,
-          )
-        }
-
-        await save('transactions', sourceKey, row_, label)
-        summary.transactions.ok++
-
-        // Flag likely-recurring items for the user to review manually
-        // (DESIGN §9 — the import never creates rules silently).
-        if (/salary|เงินเดือน|insurance|ประกัน|netflix|subscription/i.test(`${label} ${categoryName}`)) {
-          suggestedRecurring.push(row)
-        }
+        parsedRows.push({ i, row, sourceKey, date, label, categoryName, owner, accountName, instrument, kind, amount })
       } catch (err) {
         summary.transactions.failed++
         summary.failures.push(`transactions row ${i}: ${(err as Error).message}`)
@@ -426,11 +460,171 @@ async function main() {
     console.warn(`Skipping transactions.csv: ${(err as Error).message}`)
   }
 
+  // Pass 1: group every subscription-looking expense row by the same key its
+  // recurring rule would use, so a name match on a single occurrence can be
+  // told apart from a genuine multi-month subscription.
+  const subscriptionGroups = new Map<string, ParsedTxnRow[]>()
+  for (const p of parsedRows) {
+    if (p.kind !== 'expense' || !isLikelySubscription(p.label, p.categoryName)) continue
+    const key = subscriptionSourceKey(p.label, p.owner, p.accountName)
+    const group = subscriptionGroups.get(key) ?? []
+    group.push(p)
+    subscriptionGroups.set(key, group)
+  }
+  // A label match on one occurrence only is not a subscription — it's caught
+  // by the manual "likely recurring" list below instead, same as before.
+  const recurringSourceKeys = new Set(
+    [...subscriptionGroups.entries()].filter(([, group]) => group.length >= 2).map(([key]) => key),
+  )
+
+  // Pass 2: write every row, folding confirmed subscription groups into a
+  // recurring-rule candidate (using its earliest occurrence as the rule's
+  // instrument/owner/start date) instead of an ordinary transaction.
+  const subscriptionCandidates = new Map<
+    string,
+    {
+      name: string
+      date: string
+      amount: number
+      amountVaries: boolean
+      ownerId: string | null
+      accountId: string | null
+      cardId: string | null
+    }
+  >()
+  for (const p of parsedRows) {
+    try {
+      if (p.kind === 'expense' && isLikelySubscription(p.label, p.categoryName)) {
+        const key = subscriptionSourceKey(p.label, p.owner, p.accountName)
+        if (recurringSourceKeys.has(key)) {
+          const group = subscriptionGroups.get(key)!
+          const earliest = group.reduce((a, b) => (b.date < a.date ? b : a))
+          const amountVaries = group.some((g) => g.amount !== earliest.amount)
+          subscriptionCandidates.set(key, {
+            name: earliest.label,
+            date: earliest.date,
+            amount: earliest.amount,
+            amountVaries,
+            ownerId: earliest.owner,
+            accountId: earliest.instrument.accountId,
+            cardId: earliest.instrument.cardId,
+          })
+          summary.transactions.skippedSubscriptions++
+          continue
+        }
+      }
+
+      const row_: Record<string, unknown> = {
+        household_id: householdId,
+        source_key: p.sourceKey,
+        source: 'import',
+        date: p.date,
+        kind: p.kind,
+        note: p.label || null,
+        amount: p.amount,
+        owner_id: p.owner,
+        from_account_id: p.instrument.accountId,
+        from_card_id: p.instrument.cardId,
+        debt_exempt: debtFrom === null || p.date < debtFrom,
+      }
+      if (p.kind !== 'transfer') {
+        // Sheet rows left without a category still need one (category_id is
+        // required for income/expense); fall back to "Other" rather than
+        // dropping a real transaction, and let the user re-tag it later.
+        row_.category_id = resolveCategory(p.categoryName, p.kind) ?? resolveCategory('Other', p.kind)
+        row_.category_kind = p.kind
+      } else {
+        const toCardId = cardIdByName.get(p.categoryName.trim().toLowerCase()) ?? null
+        row_.to_card_id = toCardId
+      }
+
+      if (p.kind !== 'transfer' && p.categoryName && !resolveCategory(p.categoryName, p.kind)) {
+        summary.warnings.push(
+          `transaction row ${p.i}: category "${p.categoryName}" does not exist — it will import silently as "Other".`,
+        )
+      }
+      const clash = installmentNames.find((n) => n && p.label.toLowerCase().includes(n.toLowerCase()))
+      if (clash) {
+        summary.warnings.push(
+          `transaction row ${p.i} ("${p.label}") looks like a period of installment "${clash}", which the app ` +
+            `posts by itself — importing it too would double-count the charge. Remove it from transactions.csv.`,
+        )
+      }
+
+      await save('transactions', p.sourceKey, row_, p.label)
+      summary.transactions.ok++
+
+      // Flag likely-recurring items for the user to review manually
+      // (DESIGN §9 — the import never creates rules silently).
+      if (/salary|เงินเดือน|insurance|ประกัน|netflix|subscription/i.test(`${p.label} ${p.categoryName}`)) {
+        suggestedRecurring.push(p.row)
+      }
+    } catch (err) {
+      summary.transactions.failed++
+      summary.failures.push(`transactions row ${p.i}: ${(err as Error).message}`)
+    }
+  }
+
+  // --- Recurring rules from legacy Subscription rows -------------------
+  if (subscriptionCandidates.size > 0) {
+    const subscriptionCategoryId = await ensureExpenseCategory('Subscriptions')
+    for (const [sourceKey, candidate] of subscriptionCandidates) {
+      try {
+        const dayOfMonth = Number(candidate.date.slice(-2))
+        await save(
+          'recurring_rules',
+          sourceKey,
+          {
+            household_id: householdId,
+            source_key: sourceKey,
+            name: candidate.name,
+            kind: 'expense',
+            category_id: subscriptionCategoryId,
+            category_kind: 'expense',
+            amount: candidate.amount,
+            owner_id: candidate.ownerId,
+            from_account_id: candidate.accountId,
+            from_card_id: candidate.cardId,
+            freq: 'monthly',
+            interval: 1,
+            day_of_month: dayOfMonth,
+            month_end: 'clamp',
+            start_date: candidate.date,
+            // last_generated_date stays null on purpose: the app's own
+            // materialiser (src/lib/recurring.ts) then backfills one
+            // transaction per month from start_date to today, replacing the
+            // individual rows this import just skipped — the whole point of
+            // converting them. Backfilling only reproduces history correctly
+            // if the amount never changed, so a group whose occurrences
+            // disagree on amount is marked variable_amount instead of
+            // auto_post: those backfilled (and future) rows land in the
+            // review strip for a human to confirm the amount, rather than
+            // silently freezing a wrong number across every past month.
+            auto_post: !candidate.amountVaries,
+            variable_amount: candidate.amountVaries,
+            active: true,
+            last_generated_date: null,
+          },
+          candidate.name,
+        )
+        summary.recurringRules.ok++
+      } catch (err) {
+        summary.recurringRules.failed++
+        summary.failures.push(`recurring subscription "${candidate.name}": ${(err as Error).message}`)
+      }
+    }
+  }
+
   console.log(dryRun ? '\n--- Dry run: nothing was written ---' : '\n--- Import summary ---')
   console.log(`Accounts:      ${summary.accounts.ok} ok, ${summary.accounts.failed} failed`)
   console.log(`Cards:         ${summary.cards.ok} ok, ${summary.cards.failed} failed`)
   console.log(`Installments:  ${summary.installments.ok} ok, ${summary.installments.failed} failed, ${summary.installments.payments} payments recorded`)
   console.log(`Transactions:  ${summary.transactions.ok} ok, ${summary.transactions.failed} failed`)
+  console.log(
+    `Skipped:       ${summary.transactions.skippedInstallments} installment periods, ` +
+      `${summary.transactions.skippedSubscriptions} subscription rows`,
+  )
+  console.log(`Recurring:     ${summary.recurringRules.ok} ok, ${summary.recurringRules.failed} failed`)
   console.log(`${dryRun ? 'Would insert' : 'Inserted'}: ${summary.inserts}   ${dryRun ? 'would update' : 'updated'}: ${summary.updates}`)
 
   if (summary.warnings.length > 0) {

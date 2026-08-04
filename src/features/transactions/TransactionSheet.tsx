@@ -11,10 +11,14 @@ import { AmountField } from '@/components/AmountField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
 import { OwnerSelect } from '@/components/OwnerSelect'
+import { Switch } from '@/components/ui/switch'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
+import { useAccounts } from '@/lib/accounts'
+import { useCards } from '@/lib/cards'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { useCategories, type Category } from '@/lib/categories'
 import { useCategoryUsage } from '@/lib/categoryUsage'
+import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { supabase } from '@/lib/supabase'
 import {
@@ -44,6 +48,8 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const { householdId, self, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const { data: usage } = useCategoryUsage(householdId)
+  const { data: accounts } = useAccounts(householdId)
+  const { data: cards } = useCards(householdId)
   const queryClient = useQueryClient()
   const create = useCreateTransaction(householdId)
   const update = useUpdateTransaction(householdId)
@@ -61,10 +67,14 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     accountId: transaction?.to_account_id ?? null,
     cardId: transaction?.to_card_id ?? null,
   })
-  const [ownerId, setOwnerId] = useState<string | null>(transaction?.owner_id ?? self.id)
+  // `?? self.id` would be wrong: null is a real owner value meaning "shared"
+  // (§4.2), so a nullish fallback silently reassigns every shared transaction
+  // to whoever opened it for editing — and saving that drops its split.
+  const [ownerId, setOwnerId] = useState<string | null>(transaction ? transaction.owner_id : self.id)
   const [date, setDate] = useState(transaction?.date ?? today())
   const [description, setDescription] = useState(transaction?.description ?? '')
   const [note, setNote] = useState(transaction?.note ?? '')
+  const [debtExempt, setDebtExempt] = useState(transaction?.debt_exempt ?? false)
 
   // Progressive disclosure (DESIGN.md §7.2): the grid starts at 2 rows,
   // owner/date collapse into a one-line summary, and description (the
@@ -132,6 +142,26 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const ownerLabel = ownerId ? (members.find((m) => m.id === ownerId)?.display_name ?? 'Shared') : 'Shared'
   const dateLabel = date === today() ? 'Today' : date
 
+  // The database (0022) writes transaction_shares itself, for every save —
+  // create, edit, import, recurring, installment — so the form never has to.
+  // What it does need to do is tell the person what's about to happen: two
+  // ways a transaction can turn into a debt (0023's debt_kind), from
+  // whichever instrument is currently selected.
+  const frontingMemberId =
+    (from.accountId ? accounts?.find((a) => a.id === from.accountId)?.owner_id : null) ??
+    (from.cardId ? cards?.find((c) => c.id === from.cardId)?.owner_id : null) ??
+    null
+  const isSplit = kind !== 'transfer' && ownerId === null && members.length > 1
+  const isBorrow =
+    kind !== 'transfer' && ownerId !== null && frontingMemberId !== null && frontingMemberId !== ownerId
+  const debtPreview = isSplit
+    ? amountField.value > 0
+      ? `Split evenly · ${formatBaht(amountField.value / members.length)} each (${members.length})`
+      : null
+    : isBorrow
+      ? `On ${members.find((m) => m.id === frontingMemberId)?.display_name ?? 'their'}'s card/account — counts as owing ${formatBaht(amountField.value)}`
+      : null
+
   const canSave =
     amountField.value > 0 &&
     (kind === 'transfer' ? Boolean(to.accountId || to.cardId) : Boolean(categoryId)) &&
@@ -165,6 +195,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     setExpandedMainId(null)
     setMetaOpen(false)
     setDetailsOpen(false)
+    setDebtExempt(false)
   }
 
   async function handleSave() {
@@ -181,25 +212,34 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
       toAccountId: kind === 'transfer' ? to.accountId : null,
       toCardId: kind === 'transfer' ? to.cardId : null,
       note: note || null,
+      debtExempt,
     }
-    if (transaction) {
-      // Saving an unconfirmed (generated) row counts as reviewing it.
-      await update.mutateAsync({ id: transaction.id, input, confirm: !transaction.confirmed })
+    try {
+      if (transaction) {
+        // Saving an unconfirmed (generated) row counts as reviewing it.
+        await update.mutateAsync({ id: transaction.id, input, confirm: !transaction.confirmed })
+        onOpenChange(false)
+        return
+      }
+      const id = await create.mutateAsync(input)
+      resetForNextEntry()
       onOpenChange(false)
-      return
-    }
-    const id = await create.mutateAsync(input)
-    resetForNextEntry()
-    onOpenChange(false)
-    toast.success('Transaction saved', {
-      action: {
-        label: 'Undo',
-        onClick: async () => {
-          await supabase.from('transactions').update({ deleted_at: new Date().toISOString() }).eq('id', id)
-          queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
+      toast.success('Transaction saved', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            await supabase.from('transactions').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+            queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
+          },
         },
-      },
-    })
+      })
+    } catch (err) {
+      // Some edits are refused outright — changing the amount of a shared
+      // transaction whose split is already settled, for one (0022). Those
+      // messages say what to do about it, so show them instead of failing
+      // silently, which is what an unhandled rejection here used to do.
+      toast.error(err instanceof Error ? err.message : 'Could not save the transaction.')
+    }
   }
 
   async function handleDelete() {
@@ -348,12 +388,25 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
               <div className="space-y-1.5">
                 <Label>Owner</Label>
                 <OwnerSelect value={ownerId} onChange={setOwnerId} />
+                {debtPreview && <p className="text-xs text-muted-foreground">{debtPreview}</p>}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="txn-date">Date</Label>
                 <Input id="txn-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
               </div>
             </div>
+          )}
+
+          {(isSplit || isBorrow) && (
+            <label className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm">
+              <span>
+                Not a debt
+                <span className="block text-xs text-muted-foreground">
+                  Won't show up as owed on Overview, even though it isn't on your own card/account.
+                </span>
+              </span>
+              <Switch checked={debtExempt} onCheckedChange={setDebtExempt} />
+            </label>
           )}
 
           {/* Always open, but no longer required to be the last field: both
