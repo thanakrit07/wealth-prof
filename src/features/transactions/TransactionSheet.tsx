@@ -61,7 +61,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     accountId: transaction?.to_account_id ?? null,
     cardId: transaction?.to_card_id ?? null,
   })
-  const [ownerId, setOwnerId] = useState<string | null>(transaction?.owner_id ?? self.id)
+  const [ownerId, setOwnerId] = useState<string | null>(transaction ? transaction.owner_id : self.id)
   const [date, setDate] = useState(transaction?.date ?? today())
   const [description, setDescription] = useState(transaction?.description ?? '')
   const [note, setNote] = useState(transaction?.note ?? '')
