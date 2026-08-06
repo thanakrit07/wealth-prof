@@ -1,23 +1,30 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, CalendarSync, ChevronDown, MoreHorizontal, Repeat, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, CalendarSync, Repeat, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AmountField } from '@/components/AmountField'
-import { DateField } from '@/components/DateField'
-import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
+import { CategoryIcon } from '@/lib/categoryIcons'
+import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
+import { DatePickerPanel } from '@/components/DatePickerPanel'
+import { EntryPage } from '@/components/EntryPage'
+import { EntryRow } from '@/components/EntryRow'
+import { InstrumentPickerPanel } from '@/components/InstrumentPickerPanel'
+import { type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
 import { evenSplit, WhoBearsField, type WhoBearsValue } from '@/components/WhoBearsField'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
-import { CategoryIcon } from '@/lib/categoryIcons'
+import { useEntryPanel } from '@/hooks/useEntryPanel'
 import { useCategories, type Category } from '@/lib/categories'
 import { useCategoryUsage } from '@/lib/categoryUsage'
 import type { EntryPrefill } from '@/lib/entryPrefill'
+import { useAccounts } from '@/lib/accounts'
+import { useCards } from '@/lib/cards'
 import { useHousehold } from '@/lib/HouseholdContext'
+import { toBuddhistYear } from '@/lib/month'
 import { supabase } from '@/lib/supabase'
 import {
   useCreateTransaction,
@@ -28,7 +35,6 @@ import {
   type TransactionKind,
 } from '@/lib/transactions'
 import { syncTransactionShares, useTransactionShares } from '@/lib/transactionShares'
-import { cn } from '@/lib/utils'
 import { InstallmentSheet } from '@/features/installments/InstallmentSheet'
 import { RecurringRuleSheet } from '@/features/plan/RecurringRuleSheet'
 
@@ -36,8 +42,13 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-// Top-N tiles shown before the "More" tile (7 + More = 2 rows of 4).
-const COLLAPSED_TILES = 7
+function dateRowLabel(value: string): string {
+  if (value === today()) return 'Today'
+  const d = new Date(`${value}T00:00:00`)
+  return `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })} ${toBuddhistYear(d.getFullYear())}`
+}
+
+type PanelKey = 'amount' | 'category' | 'from' | 'to' | 'date'
 
 interface Props {
   open: boolean
@@ -50,14 +61,16 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const { data: categories } = useCategories(householdId)
   const { data: usage } = useCategoryUsage(householdId)
   const { data: allShares } = useTransactionShares(householdId)
+  const { data: accounts } = useAccounts(householdId)
+  const { data: cards } = useCards(householdId)
   const queryClient = useQueryClient()
   const create = useCreateTransaction(householdId)
   const update = useUpdateTransaction(householdId)
   const remove = useDeleteTransaction(householdId)
+  const panel = useEntryPanel<PanelKey>()
 
   const [kind, setKind] = useState<TransactionKind>(transaction?.kind ?? 'expense')
   const amountField = useAmountEntry(transaction ? String(transaction.amount) : '')
-  const [keypadOpen, setKeypadOpen] = useState(false)
   const [categoryId, setCategoryId] = useState<string | null>(transaction?.category_id ?? null)
   const [from, setFrom] = useState<Instrument>({
     accountId: transaction?.from_account_id ?? null,
@@ -93,79 +106,19 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const [repInstOpen, setRepInstOpen] = useState(false)
   const [creating, setCreating] = useState<'recurring' | 'installment' | null>(null)
 
-  // Progressive disclosure (DESIGN.md §7.2): the grid starts at 2 rows,
-  // who-bears/date collapse into a one-line summary, and description (the
-  // secondary "+ Add details" field) is hidden unless already filled in
-  // (when editing) or explicitly opened. Note is the primary ledger label
-  // (0020) and stays always visible — see the input further down.
-  const [gridExpanded, setGridExpanded] = useState(false)
-  const [metaOpen, setMetaOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(Boolean(transaction?.description))
   // Once the user picks an instrument by hand (or is editing an existing
   // row), category taps must stop auto-overriding it.
   const [fromTouched, setFromTouched] = useState(Boolean(transaction))
-  // D10: which main category's subs are showing (Money Manager's chevron
-  // pattern — a main with subs expands them in place instead of selecting
-  // immediately). Auto-opens when editing a transaction filed under a sub.
-  const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!transaction?.category_id || !categories) return
-    const current = categories.find((c) => c.id === transaction.category_id)
-    if (current?.parent_id) setExpandedMainId(current.parent_id)
-  }, [categories, transaction?.category_id])
-
-  // Ordered by the arrangement set in Manage categories, not by usage
-  // frequency: the drag order is an explicit choice, and letting counts
-  // reshuffle the grid moves tiles out from under the user's muscle memory.
-  const bySortOrder = (a: Category, b: Category) => a.sort_order - b.sort_order
   const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
-  const mainCategories = relevantCategories.filter((c) => c.parent_id === null).sort(bySortOrder)
-  const subsOf = (parentId: string) => relevantCategories.filter((c) => c.parent_id === parentId).sort(bySortOrder)
+  const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
 
-  // With 8 or fewer categories everything fits in 2 rows anyway, so the
-  // More tile would only add a row. The selected category's main must
-  // always be visible, so a hidden selection (e.g. while editing) forces
-  // expansion.
-  const needsMoreTile = mainCategories.length > COLLAPSED_TILES + 1
-  const selectedCategory = categoryId ? relevantCategories.find((c) => c.id === categoryId) : null
-  const selectedMainId = selectedCategory ? (selectedCategory.parent_id ?? selectedCategory.id) : null
-  const selectionHidden =
-    selectedMainId != null && mainCategories.slice(COLLAPSED_TILES).some((c) => c.id === selectedMainId)
-  const showAll = gridExpanded || !needsMoreTile || selectionHidden
-  const visibleCategories = showAll ? mainCategories : mainCategories.slice(0, COLLAPSED_TILES)
-  const expandedSubs = expandedMainId ? subsOf(expandedMainId) : []
-
-  // One flat tile list so "More" takes part in row arithmetic like any other
-  // tile — otherwise the sub tray lands under the wrong line whenever the
-  // grid is collapsed.
-  type Tile = { kind: 'main'; category: Category } | { kind: 'more' }
-  const tiles: Tile[] = [
-    ...visibleCategories.map((category): Tile => ({ kind: 'main', category })),
-    ...(showAll ? [] : ([{ kind: 'more' }] as Tile[])),
-  ]
-
-  // D10: the sub tray goes right after the last tile of the row holding the
-  // tapped main, not after the whole grid, so it reads as belonging to that
-  // row instead of appearing a full row away.
-  const expandedTileIndex = tiles.findIndex((t) => t.kind === 'main' && t.category.id === expandedMainId)
-  const subRowAfter =
-    expandedSubs.length === 0
-      ? -1
-      : expandedTileIndex < 0
-        ? tiles.length - 1
-        : Math.min(Math.floor(expandedTileIndex / 4) * 4 + 3, tiles.length - 1)
-
-  const whoBearsLabel =
-    whoBears.mode === 'you'
-      ? self.display_name
-      : whoBears.mode === 'split'
-        ? 'Split evenly'
-        : (() => {
-            const bearers = members.filter((m) => (whoBears.custom[m.id] ?? 0) > 0)
-            return bearers.length === 1 ? bearers[0].display_name : 'Custom'
-          })()
-  const dateLabel = date === today() ? 'Today' : date
+  function instrumentLabel(instrument: Instrument): string {
+    if (instrument.accountId) return accounts?.find((a) => a.id === instrument.accountId)?.name ?? '…'
+    if (instrument.cardId) return cards?.find((c) => c.id === instrument.cardId)?.name ?? '…'
+    return ''
+  }
 
   const canSave =
     amountField.value > 0 &&
@@ -174,8 +127,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   function changeKind(next: TransactionKind) {
     setKind(next)
-    setGridExpanded(false)
-    setExpandedMainId(null)
+    panel.close()
     // A category from the other kind would violate the DB's composite FK.
     const current = categories?.find((c) => c.id === categoryId)
     if (current && current.kind !== next) setCategoryId(null)
@@ -192,13 +144,10 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   function resetForNextEntry() {
     amountField.reset()
-    setKeypadOpen(false)
+    panel.close()
     setDescription('')
     setNote('')
     setCategoryId(null)
-    setGridExpanded(false)
-    setExpandedMainId(null)
-    setMetaOpen(false)
     setDetailsOpen(false)
     setWhoBears({ mode: 'you', custom: {} })
   }
@@ -288,226 +237,51 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     onOpenChange(false)
   }
 
+  if (!open) return null
+
   return (
     <>
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>{transaction ? 'Edit transaction' : 'Add transaction'}</DrawerTitle>
-        </DrawerHeader>
-
-        <div className="space-y-3 px-4 pb-4">
-          <AmountField size="lg" expr={amountField.expr} active={keypadOpen} onActivate={() => setKeypadOpen(true)} />
-
-          <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
-            <TabsList className="w-full">
-              <TabsTrigger value="expense" className="flex-1">
-                Expense
-              </TabsTrigger>
-              <TabsTrigger value="income" className="flex-1">
-                Income
-              </TabsTrigger>
-              <TabsTrigger value="transfer" className="flex-1">
-                Transfer
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          {kind !== 'transfer' ? (
-            <div className="grid grid-cols-4 gap-1.5">
-              {tiles.map((tile, i) => {
-                const c = tile.kind === 'main' ? tile.category : null
-                const hasSubs = c ? subsOf(c.id).length > 0 : false
-                const isExpandedMain = c != null && expandedMainId === c.id
-                const showTrayAfter = i === subRowAfter
-                return (
-                  <Fragment key={c ? c.id : '__more__'}>
-                    {c ? (
-                      <button
-                        // Selecting the main is always enough to save; the
-                        // subs just open alongside as an optional refinement,
-                        // so a main with children is never a dead end.
-                        onClick={() => {
-                          selectCategory(c)
-                          setExpandedMainId(hasSubs && !isExpandedMain ? c.id : null)
-                        }}
-                        className={cn(
-                          'relative flex flex-col items-center gap-0.5 rounded-lg border px-1 py-1.5 text-[11px] leading-tight',
-                          categoryId === c.id
-                            ? 'border-primary bg-primary/10'
-                            : isExpandedMain
-                              ? 'border-primary/40'
-                              : 'border-border',
-                          isExpandedMain && showTrayAfter && 'rounded-b-none border-b-transparent',
-                        )}
-                      >
-                        <CategoryIcon icon={c.icon} color={c.color} className="size-4.5" />
-                        <span className="w-full truncate text-center">{c.name}</span>
-                        {hasSubs && (
-                          <ChevronDown
-                            className={cn(
-                              'absolute top-0.5 right-0.5 size-3 text-muted-foreground transition-transform',
-                              isExpandedMain && 'rotate-180',
-                            )}
-                          />
-                        )}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setGridExpanded(true)}
-                        className="flex flex-col items-center gap-0.5 rounded-lg border border-dashed border-border px-1 py-1.5 text-[11px] leading-tight text-muted-foreground"
-                      >
-                        <MoreHorizontal className="size-4.5" />
-                        <span>More</span>
-                      </button>
-                    )}
-
-                    {showTrayAfter && (
-                      // -mt-1.5 cancels the grid gap so the tray butts against
-                      // the row above; the matching accent border keeps it
-                      // reading as attached to the tapped main rather than a
-                      // new row of peers (D10 — sub categories shown close to
-                      // their parent).
-                      <div className="col-span-4 -mt-1.5 grid grid-cols-4 gap-1.5 rounded-lg rounded-t-none border border-t-0 border-primary/40 bg-muted/50 p-1.5">
-                        {expandedSubs.map((sub) => (
-                          <button
-                            key={sub.id}
-                            onClick={() => selectCategory(sub)}
-                            className={cn(
-                              'flex flex-col items-center gap-0.5 rounded-lg border bg-background px-1 py-1.5 text-[11px] leading-tight',
-                              categoryId === sub.id ? 'border-primary bg-primary/10' : 'border-border',
-                            )}
-                          >
-                            <CategoryIcon icon={sub.icon} color={sub.color} className="size-4" />
-                            <span className="w-full truncate text-center">{sub.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-              <ArrowRightLeft className="size-4" />
-              Between your own accounts/cards
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label>{kind === 'transfer' ? 'From' : 'Account / card'}</Label>
-            <InstrumentSelect
+      <EntryPage
+        title={transaction ? 'Edit transaction' : 'Add transaction'}
+        onClose={() => onOpenChange(false)}
+        footer={
+          panel.active === 'amount' ? (
+            <Keypad onKey={amountField.press} onEquals={amountField.pressEquals} onDone={panel.close} />
+          ) : panel.active === 'category' ? (
+            <CategoryPickerPanel
+              categories={categories ?? []}
+              kind={kind === 'transfer' ? 'expense' : kind}
+              selectedId={categoryId}
+              onSelect={(c, hasSubs) => {
+                selectCategory(c)
+                if (!hasSubs) panel.close()
+              }}
+            />
+          ) : panel.active === 'from' ? (
+            <InstrumentPickerPanel
               value={from}
               onChange={(next) => {
                 setFrom(next)
                 setFromTouched(true)
+                panel.close()
               }}
             />
-          </div>
-
-          {kind === 'transfer' && (
-            <div className="space-y-1.5">
-              <Label>To</Label>
-              <InstrumentSelect value={to} onChange={setTo} />
-            </div>
-          )}
-
-          {!metaOpen ? (
-            <button
-              type="button"
-              onClick={() => setMetaOpen(true)}
-              className="flex w-full items-center justify-between text-sm text-muted-foreground"
-            >
-              <span>
-                {kind === 'expense' ? `${whoBearsLabel} · ` : ''}
-                {dateLabel}
-              </span>
-              <span className="underline underline-offset-2">Edit</span>
-            </button>
-          ) : (
-            <div className="space-y-2">
-              {kind === 'expense' && (
-                <WhoBearsField amount={amountField.value} members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} />
-              )}
-              <div className="flex items-center gap-1.5">
-                <div className="flex-1 space-y-1.5">
-                  <Label htmlFor="txn-date">Date</Label>
-                  <DateField id="txn-date" value={date} onChange={setDate} />
-                </div>
-                {kind !== 'transfer' && !transaction && (
-                  <div className="relative shrink-0 self-end">
-                    <Button
-                      type="button"
-                      variant={repInstOpen ? 'secondary' : 'outline'}
-                      size="icon"
-                      onClick={() => setRepInstOpen((o) => !o)}
-                      aria-label="Repeat or instalment"
-                    >
-                      <CalendarSync className="size-4" />
-                    </Button>
-                    {repInstOpen && (
-                      <div className="absolute right-0 bottom-full z-10 mb-1.5 w-40 space-y-1 rounded-xl border bg-popover p-1.5 shadow-md">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRepInstOpen(false)
-                            setCreating('recurring')
-                          }}
-                          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors active:bg-accent"
-                        >
-                          <Repeat className="size-4 text-muted-foreground" />
-                          Repeat
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRepInstOpen(false)
-                            setCreating('installment')
-                          }}
-                          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors active:bg-accent"
-                        >
-                          <CalendarSync className="size-4 text-muted-foreground" />
-                          Instalment
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Always open, but no longer required to be the last field: both
-              this and Details sit at the very bottom of the form, so neither
-              one's keyboard ever has something below it to shove (D9,
-              §7.2) — only their order relative to each other changes here. */}
-          <div className="space-y-1.5">
-            <Label htmlFor="txn-note">Note</Label>
-            {/* Tapping in needs the system keyboard, not the amount keypad —
-                without closing it, both fight for the same screen space. */}
-            <Input id="txn-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={() => setKeypadOpen(false)} />
-          </div>
-
-          {!detailsOpen ? (
-            <button
-              type="button"
-              onClick={() => setDetailsOpen(true)}
-              className="text-sm text-muted-foreground underline-offset-2 hover:underline"
-            >
-              + Add details
-            </button>
-          ) : (
-            <div className="space-y-1.5">
-              <Label htmlFor="txn-description">Details (optional)</Label>
-              <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} onFocus={() => setKeypadOpen(false)} />
-            </div>
-          )}
-        </div>
-
-        <DrawerFooter>
-          {keypadOpen ? (
-            <Keypad onKey={amountField.press} onEquals={amountField.pressEquals} onDone={() => setKeypadOpen(false)} />
+          ) : panel.active === 'to' ? (
+            <InstrumentPickerPanel
+              value={to}
+              onChange={(next) => {
+                setTo(next)
+                panel.close()
+              }}
+            />
+          ) : panel.active === 'date' ? (
+            <DatePickerPanel
+              value={date}
+              onChange={(d) => {
+                setDate(d)
+                panel.close()
+              }}
+            />
           ) : (
             <div className="flex gap-2">
               {transaction && (
@@ -519,31 +293,165 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
                 Save
               </Button>
             </div>
-          )}
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+          )
+        }
+      >
+        <AmountField
+          size="lg"
+          expr={amountField.expr}
+          active={panel.active === 'amount'}
+          onActivate={() => panel.toggle('amount')}
+        />
 
-    {creating === 'recurring' && (
-      <RecurringRuleSheet
-        rule={null}
-        prefill={buildPrefill()}
-        onClose={() => {
-          setCreating(null)
-          onOpenChange(false)
-        }}
-      />
-    )}
-    {creating === 'installment' && (
-      <InstallmentSheet
-        installment={null}
-        prefill={buildPrefill()}
-        onClose={() => {
-          setCreating(null)
-          onOpenChange(false)
-        }}
-      />
-    )}
+        <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
+          <TabsList className="w-full">
+            <TabsTrigger value="expense" className="flex-1">
+              Expense
+            </TabsTrigger>
+            <TabsTrigger value="income" className="flex-1">
+              Income
+            </TabsTrigger>
+            <TabsTrigger value="transfer" className="flex-1">
+              Transfer
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {kind !== 'transfer' ? (
+          <EntryRow
+            label="Category"
+            placeholder={!selectedCategory}
+            active={panel.active === 'category'}
+            onClick={() => panel.toggle('category')}
+            value={
+              selectedCategory ? (
+                <span className="flex items-center gap-1.5">
+                  <CategoryIcon icon={selectedCategory.icon} color={selectedCategory.color} className="size-4" />
+                  {selectedCategory.name}
+                </span>
+              ) : (
+                'Choose a category'
+              )
+            }
+          />
+        ) : (
+          <div className="flex items-center justify-center gap-2 py-1.5 text-sm text-muted-foreground">
+            <ArrowRightLeft className="size-4" />
+            Between your own accounts/cards
+          </div>
+        )}
+
+        <EntryRow
+          label={kind === 'transfer' ? 'From' : 'Account / card'}
+          placeholder={!from.accountId && !from.cardId}
+          active={panel.active === 'from'}
+          onClick={() => panel.toggle('from')}
+          value={from.accountId || from.cardId ? instrumentLabel(from) : 'Select account or card'}
+        />
+
+        {kind === 'transfer' && (
+          <EntryRow
+            label="To"
+            placeholder={!to.accountId && !to.cardId}
+            active={panel.active === 'to'}
+            onClick={() => panel.toggle('to')}
+            value={to.accountId || to.cardId ? instrumentLabel(to) : 'Select account or card'}
+          />
+        )}
+
+        {kind === 'expense' && (
+          <WhoBearsField amount={amountField.value} members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} />
+        )}
+
+        <div className="flex items-center gap-1.5">
+          <div className="flex-1">
+            <EntryRow label="Date" active={panel.active === 'date'} onClick={() => panel.toggle('date')} value={dateRowLabel(date)} />
+          </div>
+          {kind !== 'transfer' && !transaction && (
+            <div className="relative shrink-0">
+              <Button
+                type="button"
+                variant={repInstOpen ? 'secondary' : 'outline'}
+                size="icon"
+                onClick={() => setRepInstOpen((o) => !o)}
+                aria-label="Repeat or instalment"
+              >
+                <CalendarSync className="size-4" />
+              </Button>
+              {repInstOpen && (
+                <div className="absolute right-0 bottom-full z-10 mb-1.5 w-40 space-y-1 rounded-lg border bg-popover p-1.5 shadow-md">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRepInstOpen(false)
+                      setCreating('recurring')
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors active:bg-accent"
+                  >
+                    <Repeat className="size-4 text-muted-foreground" />
+                    Repeat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRepInstOpen(false)
+                      setCreating('installment')
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors active:bg-accent"
+                  >
+                    <CalendarSync className="size-4 text-muted-foreground" />
+                    Instalment
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="txn-note">Note</Label>
+          {/* Tapping in needs the system keyboard, not the shared panel —
+              without closing it, both fight for the same screen space. */}
+          <Input id="txn-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={panel.close} />
+        </div>
+
+        {!detailsOpen ? (
+          <button
+            type="button"
+            onClick={() => setDetailsOpen(true)}
+            className="text-sm text-muted-foreground underline-offset-2 hover:underline"
+          >
+            + Add details
+          </button>
+        ) : (
+          <div className="space-y-1.5">
+            <Label htmlFor="txn-description">Details (optional)</Label>
+            <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} onFocus={panel.close} />
+          </div>
+        )}
+      </EntryPage>
+
+      {creating === 'recurring' && (
+        <RecurringRuleSheet
+          rule={null}
+          prefill={buildPrefill()}
+          onClose={() => {
+            setCreating(null)
+            onOpenChange(false)
+          }}
+        />
+      )}
+      {creating === 'installment' && (
+        <InstallmentSheet
+          installment={null}
+          prefill={buildPrefill()}
+          onClose={() => {
+            setCreating(null)
+            onOpenChange(false)
+          }}
+        />
+      )}
     </>
   )
 }
+

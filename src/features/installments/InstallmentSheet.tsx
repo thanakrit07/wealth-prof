@@ -3,19 +3,26 @@ import { Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
 import { AmountField } from '@/components/AmountField'
-import { DateField } from '@/components/DateField'
-import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
+import { CategoryIcon } from '@/lib/categoryIcons'
+import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
+import { DatePickerPanel } from '@/components/DatePickerPanel'
+import { EntryPage } from '@/components/EntryPage'
+import { EntryRow } from '@/components/EntryRow'
+import { InstrumentPickerPanel } from '@/components/InstrumentPickerPanel'
+import { type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
 import { PlanWhoBears, type PlanWhoBearsValue } from '@/components/PlanWhoBears'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
-import { useCategories } from '@/lib/categories'
+import { useEntryPanel } from '@/hooks/useEntryPanel'
+import { useAccounts } from '@/lib/accounts'
+import { useCards } from '@/lib/cards'
+import { useCategories, type Category } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
+import { toBuddhistYear } from '@/lib/month'
 import { isValidSplit } from '@/lib/transactionShares'
 import {
   useCreateInstallment,
@@ -28,6 +35,12 @@ import { cn } from '@/lib/utils'
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
+}
+
+function dateRowLabel(value: string): string {
+  if (value === today()) return 'Today'
+  const d = new Date(`${value}T00:00:00`)
+  return `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })} ${toBuddhistYear(d.getFullYear())}`
 }
 
 // The whole point of totalling is not doing this division by hand. The last
@@ -43,6 +56,7 @@ function splitTotal(total: number, periods: number): { monthly: number; final: n
 }
 
 type AmountMode = 'total' | 'per-period'
+type PanelKey = 'amount' | 'category' | 'instrument' | 'start'
 
 interface Props {
   installment: Installment | null
@@ -55,9 +69,12 @@ interface Props {
 export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   const { householdId, self, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
+  const { data: accounts } = useAccounts(householdId)
+  const { data: cards } = useCards(householdId)
   const create = useCreateInstallment(householdId)
   const update = useUpdateInstallment(householdId)
   const remove = useDeleteInstallment(householdId)
+  const panel = useEntryPanel<PanelKey>()
 
   const [name, setName] = useState(installment?.name ?? prefill?.name ?? '')
   const [categoryId, setCategoryId] = useState<string | null>(installment?.category_id ?? prefill?.categoryId ?? null)
@@ -77,7 +94,6 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
       ? prefill.amount
       : 0
   const amount = useAmountEntry(installment || prefill ? String(initialAmount) : '')
-  const [activeAmount, setActiveAmount] = useState(false)
   const { monthly: previewMonthly, final: previewFinal } =
     amountMode === 'total' ? splitTotal(amount.value, periodsNum) : { monthly: amount.value, final: amount.value }
   const previewTotal = amountMode === 'total' ? amount.value : amount.value * periodsNum
@@ -93,12 +109,14 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   })
   const [note, setNote] = useState(installment?.note ?? '')
 
-  const flatExpenseCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
-  // Mains followed immediately by their own subs (D10) — a flat dropdown
-  // still needs to read as a hierarchy, not a shuffled list.
-  const expenseCategories = flatExpenseCategories
-    .filter((c) => c.parent_id === null)
-    .flatMap((main) => [main, ...flatExpenseCategories.filter((c) => c.parent_id === main.id)])
+  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
+  const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
+
+  function instrumentLabel(i: Instrument): string {
+    if (i.accountId) return accounts?.find((a) => a.id === i.accountId)?.name ?? '…'
+    if (i.cardId) return cards?.find((c) => c.id === i.cardId)?.name ?? '…'
+    return ''
+  }
 
   // Category is required, not a nicety: every period posts as an expense, and
   // transactions' category_iff_not_transfer check rejects an expense with no
@@ -147,136 +165,150 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   }
 
   return (
-    <Drawer open onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>{installment ? 'Edit installment' : 'New installment'}</DrawerTitle>
-        </DrawerHeader>
-
-        <div className="space-y-4 px-4 pb-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="inst-name">Name</Label>
-            {/* No autoFocus: opening the system keyboard the instant the sheet
-                mounts is what shoved the whole sheet off-screen on iOS
-                (DESIGN §7.2 D9 — same bug the amount keypad exists to avoid).
-                Tapping the field remains a deliberate, expected keyboard open. */}
-            <Input id="inst-name" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Category</Label>
-            <Select value={categoryId ?? ''} onValueChange={setCategoryId}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Choose a category" /></SelectTrigger>
-              <SelectContent>
-                {expenseCategories.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.parent_id ? `↳ ${c.name}` : c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="inst-start">Start date</Label>
-              <DateField id="inst-start" value={startDate} onChange={setStartDate} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="inst-periods">Total periods</Label>
-              <Input id="inst-periods" type="number" min={1} value={totalPeriods} onChange={(e) => setTotalPeriods(e.target.value)} />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label>{amountMode === 'total' ? 'Total amount' : 'Amount per period'}</Label>
-              <div className="flex gap-1 rounded-lg border p-0.5 text-xs">
-                {(['total', 'per-period'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setAmountMode(m)}
-                    className={cn(
-                      'rounded-md px-2 py-1 transition-colors',
-                      amountMode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
-                    )}
-                  >
-                    {m === 'total' ? 'Total' : 'Per period'}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <AmountField
-              expr={amount.expr}
-              active={activeAmount}
-              onActivate={() => setActiveAmount(true)}
-              size="lg"
-            />
-            {/* Whichever half wasn't typed — the split, or the total it adds
-                up to — so entering it "the bank's way round" still shows
-                what the plan actually commits to (§7.2 v3.5). */}
-            {amount.value > 0 && periodsNum > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {amountMode === 'total'
-                  ? previewFinal === previewMonthly
-                    ? `${formatBaht(previewMonthly)} × ${periodsNum}`
-                    : `${formatBaht(previewMonthly)} × ${periodsNum - 1}, last period ${formatBaht(previewFinal)}`
-                  : `${formatBaht(previewTotal)} total`}
-              </p>
+    <EntryPage
+      title={installment ? 'Edit installment' : 'New installment'}
+      onClose={onClose}
+      footer={
+        panel.active === 'amount' ? (
+          <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={panel.close} />
+        ) : panel.active === 'category' ? (
+          <CategoryPickerPanel
+            categories={categories ?? []}
+            kind="expense"
+            selectedId={categoryId}
+            onSelect={(c, hasSubs) => {
+              setCategoryId(c.id)
+              if (!hasSubs) panel.close()
+            }}
+          />
+        ) : panel.active === 'instrument' ? (
+          <InstrumentPickerPanel
+            value={instrument}
+            onChange={(next) => {
+              setInstrument(next)
+              panel.close()
+            }}
+          />
+        ) : panel.active === 'start' ? (
+          <DatePickerPanel
+            value={startDate}
+            onChange={(d) => {
+              setStartDate(d)
+              panel.close()
+            }}
+          />
+        ) : (
+          <div className="flex gap-2">
+            {installment && (
+              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete installment">
+                <Trash2 className="size-4" />
+              </Button>
             )}
+            <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
+              Save
+            </Button>
           </div>
+        )
+      }
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="inst-name">Name</Label>
+        {/* No autoFocus: opening the system keyboard the instant the sheet
+            mounts is what shoved the whole sheet off-screen on iOS
+            (DESIGN §7.2 D9 — same bug the amount keypad exists to avoid).
+            Tapping the field remains a deliberate, expected keyboard open. */}
+        <Input id="inst-name" value={name} onChange={(e) => setName(e.target.value)} onFocus={panel.close} />
+      </div>
 
-          <div className="space-y-1.5">
-            <Label>Billed to</Label>
-            <InstrumentSelect value={instrument} onChange={setInstrument} />
-          </div>
+      <EntryRow
+        label="Category"
+        placeholder={!selectedCategory}
+        active={panel.active === 'category'}
+        onClick={() => panel.toggle('category')}
+        value={
+          selectedCategory ? (
+            <span className="flex items-center gap-1.5">
+              <CategoryIcon icon={selectedCategory.icon} color={selectedCategory.color} className="size-4" />
+              {selectedCategory.name}
+            </span>
+          ) : (
+            'Choose a category'
+          )
+        }
+      />
 
-          <div className="space-y-1.5">
-            <Label htmlFor="inst-rate">Annual interest rate (%)</Label>
-            <Input id="inst-rate" type="number" inputMode="decimal" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} />
-          </div>
+      <div className="grid grid-cols-2 gap-3">
+        <EntryRow label="Start date" active={panel.active === 'start'} onClick={() => panel.toggle('start')} value={dateRowLabel(startDate)} />
+        <div className="space-y-1.5">
+          <Label htmlFor="inst-periods">Total periods</Label>
+          <Input id="inst-periods" type="number" min={1} value={totalPeriods} onChange={(e) => setTotalPeriods(e.target.value)} onFocus={panel.close} />
+        </div>
+      </div>
 
-          <div className="space-y-1.5">
-            <Label>Who bears</Label>
-            <PlanWhoBears
-              members={members}
-              selfId={self.id}
-              value={whoBears}
-              onChange={setWhoBears}
-              referenceAmount={previewMonthly}
-            />
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border p-3">
-            <div>
-              <Label htmlFor="inst-cash-advance">Cash advance</Label>
-              <p className="text-xs text-muted-foreground">Floats to the top of the payoff ranking</p>
-            </div>
-            <Switch id="inst-cash-advance" checked={isCashAdvance} onCheckedChange={setIsCashAdvance} />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="inst-note">Note (optional)</Label>
-            <Input id="inst-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={() => setActiveAmount(false)} />
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label>{amountMode === 'total' ? 'Total amount' : 'Amount per period'}</Label>
+          <div className="flex gap-1 rounded-lg border p-0.5 text-xs">
+            {(['total', 'per-period'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setAmountMode(m)}
+                className={cn(
+                  'rounded-md px-2 py-1 transition-colors',
+                  amountMode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+                )}
+              >
+                {m === 'total' ? 'Total' : 'Per period'}
+              </button>
+            ))}
           </div>
         </div>
+        <AmountField expr={amount.expr} active={panel.active === 'amount'} onActivate={() => panel.toggle('amount')} size="lg" />
+        {/* Whichever half wasn't typed — the split, or the total it adds
+            up to — so entering it "the bank's way round" still shows
+            what the plan actually commits to (§7.2 v3.5). */}
+        {amount.value > 0 && periodsNum > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {amountMode === 'total'
+              ? previewFinal === previewMonthly
+                ? `${formatBaht(previewMonthly)} × ${periodsNum}`
+                : `${formatBaht(previewMonthly)} × ${periodsNum - 1}, last period ${formatBaht(previewFinal)}`
+              : `${formatBaht(previewTotal)} total`}
+          </p>
+        )}
+      </div>
 
-        <DrawerFooter>
-          {activeAmount ? (
-            <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={() => setActiveAmount(false)} />
-          ) : (
-            <div className="flex gap-2">
-              {installment && (
-                <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete installment">
-                  <Trash2 className="size-4" />
-                </Button>
-              )}
-              <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
-                Save
-              </Button>
-            </div>
-          )}
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+      <EntryRow
+        label="Billed to"
+        placeholder={!instrument.accountId && !instrument.cardId}
+        active={panel.active === 'instrument'}
+        onClick={() => panel.toggle('instrument')}
+        value={instrument.accountId || instrument.cardId ? instrumentLabel(instrument) : 'Select account or card'}
+      />
+
+      <div className="space-y-1.5">
+        <Label htmlFor="inst-rate">Annual interest rate (%)</Label>
+        <Input id="inst-rate" type="number" inputMode="decimal" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} onFocus={panel.close} />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Who bears</Label>
+        <PlanWhoBears members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} referenceAmount={previewMonthly} />
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border p-3">
+        <div>
+          <Label htmlFor="inst-cash-advance">Cash advance</Label>
+          <p className="text-xs text-muted-foreground">Floats to the top of the payoff ranking</p>
+        </div>
+        <Switch id="inst-cash-advance" checked={isCashAdvance} onCheckedChange={setIsCashAdvance} />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="inst-note">Note (optional)</Label>
+        <Input id="inst-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={panel.close} />
+      </div>
+    </EntryPage>
   )
 }

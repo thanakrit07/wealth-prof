@@ -96,7 +96,7 @@
     --good-foreground: oklch(0.4 0.13 165);
     --warning: oklch(0.94 0.06 75);
     --warning-foreground: oklch(0.42 0.13 55);
-    --radius: 1rem;
+    --radius: 0.5rem;
     --sidebar: oklch(0.965 0.012 60);
     --sidebar-foreground: oklch(0.28 0.025 40);
     --sidebar-primary: oklch(0.6 0.19 35);

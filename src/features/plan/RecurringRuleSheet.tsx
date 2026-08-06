@@ -4,18 +4,26 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AmountField } from '@/components/AmountField'
-import { DateField } from '@/components/DateField'
-import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
+import { CategoryIcon } from '@/lib/categoryIcons'
+import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
+import { DatePickerPanel } from '@/components/DatePickerPanel'
+import { EntryPage } from '@/components/EntryPage'
+import { EntryRow } from '@/components/EntryRow'
+import { InstrumentPickerPanel } from '@/components/InstrumentPickerPanel'
+import { type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
 import { PlanWhoBears, type PlanWhoBearsValue } from '@/components/PlanWhoBears'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
-import { useCategories } from '@/lib/categories'
+import { useEntryPanel } from '@/hooks/useEntryPanel'
+import { useAccounts } from '@/lib/accounts'
+import { useCards } from '@/lib/cards'
+import { useCategories, type Category } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useHousehold } from '@/lib/HouseholdContext'
+import { toBuddhistYear } from '@/lib/month'
 import { isValidSplit } from '@/lib/transactionShares'
 import type { MonthEndRule, RecurrenceFreq } from '@/lib/finance/recurrence'
 import {
@@ -37,6 +45,15 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+function dateRowLabel(value: string): string {
+  if (!value) return 'Not set'
+  if (value === today()) return 'Today'
+  const d = new Date(`${value}T00:00:00`)
+  return `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })} ${toBuddhistYear(d.getFullYear())}`
+}
+
+type PanelKey = 'amount' | 'category' | 'from' | 'to' | 'start' | 'end'
+
 interface Props {
   rule: RecurringRule | null
   onClose: () => void
@@ -48,14 +65,16 @@ interface Props {
 export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   const { householdId, self, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
+  const { data: accounts } = useAccounts(householdId)
+  const { data: cards } = useCards(householdId)
   const create = useCreateRecurringRule(householdId)
   const update = useUpdateRecurringRule(householdId)
   const remove = useDeleteRecurringRule(householdId)
+  const panel = useEntryPanel<PanelKey>()
 
   const [name, setName] = useState(rule?.name ?? prefill?.name ?? '')
   const [kind, setKind] = useState<TransactionKind>(rule?.kind ?? prefill?.kind ?? 'expense')
   const amount = useAmountEntry(rule ? String(rule.amount) : prefill ? String(prefill.amount) : '')
-  const [keypadOpen, setKeypadOpen] = useState(false)
   const [categoryId, setCategoryId] = useState<string | null>(rule?.category_id ?? prefill?.categoryId ?? null)
   const [from, setFrom] = useState<Instrument>({
     accountId: rule?.from_account_id ?? prefill?.from.accountId ?? null,
@@ -83,12 +102,14 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   const [variableAmount, setVariableAmount] = useState(rule?.variable_amount ?? false)
   const [active, setActive] = useState(rule?.active ?? true)
 
-  const flatCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
-  // Mains followed immediately by their own subs (D10) — a flat dropdown
-  // still needs to read as a hierarchy, not a shuffled list.
-  const relevantCategories = flatCategories
-    .filter((c) => c.parent_id === null)
-    .flatMap((main) => [main, ...flatCategories.filter((c) => c.parent_id === main.id)])
+  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
+  const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
+
+  function instrumentLabel(instrument: Instrument): string {
+    if (instrument.accountId) return accounts?.find((a) => a.id === instrument.accountId)?.name ?? '…'
+    if (instrument.cardId) return cards?.find((c) => c.id === instrument.cardId)?.name ?? '…'
+    return ''
+  }
 
   const canSave =
     name.trim().length > 0 &&
@@ -101,6 +122,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
 
   function changeKind(next: TransactionKind) {
     setKind(next)
+    panel.close()
     const current = categories?.find((c) => c.id === categoryId)
     if (current && current.kind !== next) setCategoryId(null)
     // Income is never split (ADR-0002) — the Who-bears picker hides for it,
@@ -153,190 +175,241 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   }
 
   return (
-    <Drawer open onOpenChange={(open) => !open && onClose()}>
-      <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>{rule ? 'Edit recurring rule' : 'New recurring rule'}</DrawerTitle>
-        </DrawerHeader>
-
-        <div className="space-y-4 px-4 pb-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="rule-name">Name</Label>
-            {/* No autoFocus: opening the system keyboard the instant the sheet
-                mounts is what shoved the whole sheet off-screen on iOS
-                (DESIGN §7.2 D9 — same bug the amount keypad exists to avoid).
-                Tapping the field remains a deliberate, expected keyboard open. */}
-            <Input id="rule-name" placeholder="Salary, Netflix, Car insurance…" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-
-          <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
-            <TabsList className="w-full">
-              <TabsTrigger value="expense" className="flex-1">Expense</TabsTrigger>
-              <TabsTrigger value="income" className="flex-1">Income</TabsTrigger>
-              <TabsTrigger value="transfer" className="flex-1">Transfer</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          <AmountField label="Amount" expr={amount.expr} active={keypadOpen} onActivate={() => setKeypadOpen(true)} />
-
-          {kind !== 'transfer' && (
-            <div className="space-y-1.5">
-              <Label>Category</Label>
-              <Select value={categoryId ?? ''} onValueChange={setCategoryId}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {relevantCategories.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.parent_id ? `↳ ${c.name}` : c.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label>{kind === 'transfer' ? 'From' : 'Account / card'}</Label>
-            <InstrumentSelect value={from} onChange={setFrom} />
-          </div>
-
-          {kind === 'transfer' && (
-            <div className="space-y-1.5">
-              <Label>To</Label>
-              <InstrumentSelect value={to} onChange={setTo} />
-            </div>
-          )}
-
-          {kind === 'expense' && (
-            <div className="space-y-1.5">
-              <Label>Who bears</Label>
-              <PlanWhoBears members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} referenceAmount={amount.value} />
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Repeats</Label>
-              <Select value={freq} onValueChange={(v) => setFreq(v as RecurrenceFreq)}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="weekly">Weekly</SelectItem>
-                  <SelectItem value="monthly">Monthly</SelectItem>
-                  <SelectItem value="yearly">Yearly</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rule-interval">Every N {freq === 'weekly' ? 'weeks' : freq === 'monthly' ? 'months' : 'years'}</Label>
-              <Input id="rule-interval" type="number" min={1} value={interval} onChange={(e) => setIntervalValue(e.target.value)} />
-            </div>
-          </div>
-
-          {freq === 'weekly' ? (
-            <div className="space-y-1.5">
-              <Label>Day of week</Label>
-              <Select value={weekday} onValueChange={setWeekday}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {WEEKDAYS.map((d, i) => (
-                    <SelectItem key={d} value={String(i)}>{d}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              {freq === 'yearly' && (
-                <div className="space-y-1.5">
-                  <Label>Month</Label>
-                  <Select value={monthOfYear} onValueChange={setMonthOfYear}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {MONTHS.map((m, i) => (
-                        <SelectItem key={m} value={String(i + 1)}>{m}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <div className="space-y-1.5">
-                <Label htmlFor="rule-day">Day of month</Label>
-                <Input id="rule-day" type="number" min={1} max={31} value={dayOfMonth} onChange={(e) => setDayOfMonth(e.target.value)} />
-              </div>
-              {Number(dayOfMonth) > 28 && (
-                <div className="space-y-1.5">
-                  <Label>Short months</Label>
-                  <Select value={monthEnd} onValueChange={(v) => setMonthEnd(v as MonthEndRule)}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="clamp">Use last day</SelectItem>
-                      <SelectItem value="skip">Skip month</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="rule-start">Starts</Label>
-              <DateField id="rule-start" value={startDate} onChange={setStartDate} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rule-end">Ends (optional)</Label>
-              <DateField id="rule-end" value={endDate} onChange={setEndDate} clearable />
-            </div>
-          </div>
-
-          <div className="space-y-3 rounded-xl border p-3">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <Label htmlFor="rule-autopost">Post automatically</Label>
-                <p className="text-xs text-muted-foreground">Counts immediately, no review needed</p>
-              </div>
-              <Switch id="rule-autopost" checked={autoPost} onCheckedChange={setAutoPost} />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <Label htmlFor="rule-variable">Amount varies</Label>
-                <p className="text-xs text-muted-foreground">e.g. utilities — always asks for review</p>
-              </div>
-              <Switch id="rule-variable" checked={variableAmount} onCheckedChange={setVariableAmount} />
-            </div>
+    <EntryPage
+      title={rule ? 'Edit recurring rule' : 'New recurring rule'}
+      onClose={onClose}
+      footer={
+        panel.active === 'amount' ? (
+          <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={panel.close} />
+        ) : panel.active === 'category' ? (
+          <CategoryPickerPanel
+            categories={categories ?? []}
+            kind={kind === 'transfer' ? 'expense' : kind}
+            selectedId={categoryId}
+            onSelect={(c, hasSubs) => {
+              setCategoryId(c.id)
+              if (!hasSubs) panel.close()
+            }}
+          />
+        ) : panel.active === 'from' ? (
+          <InstrumentPickerPanel
+            value={from}
+            onChange={(next) => {
+              setFrom(next)
+              panel.close()
+            }}
+          />
+        ) : panel.active === 'to' ? (
+          <InstrumentPickerPanel
+            value={to}
+            onChange={(next) => {
+              setTo(next)
+              panel.close()
+            }}
+          />
+        ) : panel.active === 'start' ? (
+          <DatePickerPanel
+            value={startDate}
+            onChange={(d) => {
+              setStartDate(d)
+              panel.close()
+            }}
+          />
+        ) : panel.active === 'end' ? (
+          <DatePickerPanel
+            value={endDate}
+            clearable
+            onChange={(d) => {
+              setEndDate(d)
+              panel.close()
+            }}
+          />
+        ) : (
+          <div className="flex gap-2">
             {rule && (
-              <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="rule-active">Active</Label>
-                <Switch id="rule-active" checked={active} onCheckedChange={setActive} />
-              </div>
-            )}
-          </div>
-
-          {rule && (
-            <p className="text-xs text-muted-foreground">
-              Changes apply to future occurrences only — entries already recorded stay as they are.
-            </p>
-          )}
-
-        </div>
-
-        <DrawerFooter>
-          {keypadOpen ? (
-            <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={() => setKeypadOpen(false)} />
-          ) : (
-            <div className="flex gap-2">
-              {rule && (
-                <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete rule">
-                  <Trash2 className="size-4" />
-                </Button>
-              )}
-              <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
-                Save
+              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete rule">
+                <Trash2 className="size-4" />
               </Button>
+            )}
+            <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
+              Save
+            </Button>
+          </div>
+        )
+      }
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="rule-name">Name</Label>
+        {/* No autoFocus: opening the system keyboard the instant the sheet
+            mounts is what shoved the whole sheet off-screen on iOS
+            (DESIGN §7.2 D9 — same bug the amount keypad exists to avoid).
+            Tapping the field remains a deliberate, expected keyboard open. */}
+        <Input
+          id="rule-name"
+          placeholder="Salary, Netflix, Car insurance…"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onFocus={panel.close}
+        />
+      </div>
+
+      <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
+        <TabsList className="w-full">
+          <TabsTrigger value="expense" className="flex-1">Expense</TabsTrigger>
+          <TabsTrigger value="income" className="flex-1">Income</TabsTrigger>
+          <TabsTrigger value="transfer" className="flex-1">Transfer</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      <AmountField label="Amount" expr={amount.expr} active={panel.active === 'amount'} onActivate={() => panel.toggle('amount')} />
+
+      {kind !== 'transfer' && (
+        <EntryRow
+          label="Category"
+          placeholder={!selectedCategory}
+          active={panel.active === 'category'}
+          onClick={() => panel.toggle('category')}
+          value={
+            selectedCategory ? (
+              <span className="flex items-center gap-1.5">
+                <CategoryIcon icon={selectedCategory.icon} color={selectedCategory.color} className="size-4" />
+                {selectedCategory.name}
+              </span>
+            ) : (
+              'Select category'
+            )
+          }
+        />
+      )}
+
+      <EntryRow
+        label={kind === 'transfer' ? 'From' : 'Account / card'}
+        placeholder={!from.accountId && !from.cardId}
+        active={panel.active === 'from'}
+        onClick={() => panel.toggle('from')}
+        value={from.accountId || from.cardId ? instrumentLabel(from) : 'Select account or card'}
+      />
+
+      {kind === 'transfer' && (
+        <EntryRow
+          label="To"
+          placeholder={!to.accountId && !to.cardId}
+          active={panel.active === 'to'}
+          onClick={() => panel.toggle('to')}
+          value={to.accountId || to.cardId ? instrumentLabel(to) : 'Select account or card'}
+        />
+      )}
+
+      {kind === 'expense' && (
+        <div className="space-y-1.5">
+          <Label>Who bears</Label>
+          <PlanWhoBears members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} referenceAmount={amount.value} />
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Repeats</Label>
+          <Select value={freq} onValueChange={(v) => setFreq(v as RecurrenceFreq)}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="weekly">Weekly</SelectItem>
+              <SelectItem value="monthly">Monthly</SelectItem>
+              <SelectItem value="yearly">Yearly</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="rule-interval">Every N {freq === 'weekly' ? 'weeks' : freq === 'monthly' ? 'months' : 'years'}</Label>
+          <Input id="rule-interval" type="number" min={1} value={interval} onChange={(e) => setIntervalValue(e.target.value)} onFocus={panel.close} />
+        </div>
+      </div>
+
+      {freq === 'weekly' ? (
+        <div className="space-y-1.5">
+          <Label>Day of week</Label>
+          <Select value={weekday} onValueChange={setWeekday}>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {WEEKDAYS.map((d, i) => (
+                <SelectItem key={d} value={String(i)}>{d}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {freq === 'yearly' && (
+            <div className="space-y-1.5">
+              <Label>Month</Label>
+              <Select value={monthOfYear} onValueChange={setMonthOfYear}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {MONTHS.map((m, i) => (
+                    <SelectItem key={m} value={String(i + 1)}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
-        </DrawerFooter>
-      </DrawerContent>
-    </Drawer>
+          <div className="space-y-1.5">
+            <Label htmlFor="rule-day">Day of month</Label>
+            <Input id="rule-day" type="number" min={1} max={31} value={dayOfMonth} onChange={(e) => setDayOfMonth(e.target.value)} onFocus={panel.close} />
+          </div>
+          {Number(dayOfMonth) > 28 && (
+            <div className="space-y-1.5">
+              <Label>Short months</Label>
+              <Select value={monthEnd} onValueChange={(v) => setMonthEnd(v as MonthEndRule)}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="clamp">Use last day</SelectItem>
+                  <SelectItem value="skip">Skip month</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <EntryRow label="Starts" active={panel.active === 'start'} onClick={() => panel.toggle('start')} value={dateRowLabel(startDate)} />
+        <EntryRow
+          label="Ends (optional)"
+          placeholder={!endDate}
+          active={panel.active === 'end'}
+          onClick={() => panel.toggle('end')}
+          value={dateRowLabel(endDate)}
+        />
+      </div>
+
+      <div className="space-y-3 rounded-lg border p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <Label htmlFor="rule-autopost">Post automatically</Label>
+            <p className="text-xs text-muted-foreground">Counts immediately, no review needed</p>
+          </div>
+          <Switch id="rule-autopost" checked={autoPost} onCheckedChange={setAutoPost} />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <Label htmlFor="rule-variable">Amount varies</Label>
+            <p className="text-xs text-muted-foreground">e.g. utilities — always asks for review</p>
+          </div>
+          <Switch id="rule-variable" checked={variableAmount} onCheckedChange={setVariableAmount} />
+        </div>
+        {rule && (
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="rule-active">Active</Label>
+            <Switch id="rule-active" checked={active} onCheckedChange={setActive} />
+          </div>
+        )}
+      </div>
+
+      {rule && (
+        <p className="text-xs text-muted-foreground">
+          Changes apply to future occurrences only — entries already recorded stay as they are.
+        </p>
+      )}
+    </EntryPage>
   )
 }
