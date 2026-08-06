@@ -106,8 +106,17 @@ _Avoid_: attributed, charged, assigned
 **Debt**:
 An amount one Member bears on a Transaction that another Member's Instrument
 paid for. It covers both halves of a shared cost and a personal cost put on
-someone else's card.
+someone else's card. Always between two Members — what is owed to a bank on a
+card is the card Owner's alone and is never divided this way.
 _Avoid_: loan, IOU, balance
+
+**Net Worth**:
+What a Member is worth: their Instruments' money, minus what their cards owe,
+plus the Debts owed to them, minus the Debts they owe. Because Debts between
+Members cancel out, the two people's Net Worth adds up to the household's. Unused
+credit is not part of it — that is spending capacity, which is a different
+question and gives a card the opposite sign.
+_Avoid_: balance (that is one Instrument's own figure), total
 
 **Cleared**:
 Said of a Transaction that has been concluded — its money has left the
