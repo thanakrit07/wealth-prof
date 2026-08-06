@@ -4,13 +4,16 @@ import { Input } from '@/components/ui/input'
 import { formatBaht } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-export type WhoBearsMode = 'you' | 'split' | 'custom'
+export type WhoBearsMode = 'you' | 'split' | 'sole' | 'custom'
 
 export interface WhoBearsValue {
   mode: WhoBearsMode
-  // Member id -> amount. Meaningful only when mode === 'custom' — "split"
-  // is always computed fresh from the live amount at save time, so editing
-  // the amount afterward never leaves it stale.
+  // Which member bears it all — meaningful only when mode === 'sole'.
+  soleBearerId?: string
+  // Member id -> amount. Meaningful only when mode === 'custom'. 'split'
+  // and 'sole' are both computed fresh from the live amount at save time
+  // (evenSplit / the amount itself), so editing the amount afterward never
+  // leaves either stale — only a real Custom breakdown freezes numbers.
   custom: Record<string, number>
 }
 
@@ -47,21 +50,14 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
   const [open, setOpen] = useState(false)
   const memberIds = useMemo(() => members.map((m) => m.id), [members])
   const others = useMemo(() => members.filter((m) => m.id !== selfId), [members, selfId])
-  // Which single other member (if any) the current Custom breakdown is
-  // "entirely theirs" for — drives both the collapsed label and which
-  // per-member button reads as selected.
-  const soleBearer = useMemo(() => {
-    if (value.mode !== 'custom') return null
-    const bearers = memberIds.filter((id) => (value.custom[id] ?? 0) > 0)
-    return bearers.length === 1 ? bearers[0] : null
-  }, [value, memberIds])
+  const soleBearer = value.mode === 'sole' ? (value.soleBearerId ?? null) : null
 
   const label = useMemo(() => {
     if (value.mode === 'you') return members.find((m) => m.id === selfId)?.display_name ?? 'You'
     if (value.mode === 'split') return 'Split evenly'
-    if (soleBearer) return members.find((m) => m.id === soleBearer)?.display_name ?? 'Custom'
+    if (value.mode === 'sole') return members.find((m) => m.id === value.soleBearerId)?.display_name ?? 'Custom'
     return 'Custom'
-  }, [value, members, selfId, soleBearer])
+  }, [value, members, selfId])
 
   const customTotal = Object.values(value.custom).reduce((sum, v) => sum + (v || 0), 0)
   const customMatches = Math.round(customTotal * 100) === Math.round(amount * 100)
@@ -78,9 +74,12 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
   }
 
   // One tap: "this belongs entirely to them" — previously meant picking them
-  // as Owner and reading it backwards; now it's Custom with just their row.
+  // as Owner and reading it backwards. Its own mode, not Custom with one
+  // row: identity ("who") is what's chosen here, and the amount is read
+  // live off `amount` wherever this gets saved — never frozen into `custom`
+  // at tap time, which is what let a same-session amount edit go unsaved.
   function selectSoleBearer(memberId: string) {
-    onChange({ mode: 'custom', custom: { [memberId]: amount } })
+    onChange({ mode: 'sole', soleBearerId: memberId, custom: {} })
   }
 
   return (
@@ -141,7 +140,7 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
                 onClick={() => selectMode('custom')}
                 className={cn(
                   'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
-                  value.mode === 'custom' && !soleBearer ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
+                  value.mode === 'custom' ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
                 )}
               >
                 Custom
@@ -149,11 +148,7 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
             )}
           </div>
 
-          {/* Not shown for a one-tap sole-bearer pick (soleBearer != null):
-              that selection is already complete, and popping the editable
-              breakdown open under it would look like more setup is needed
-              when there isn't any. */}
-          {value.mode === 'custom' && !soleBearer && (
+          {value.mode === 'custom' && (
             <div className="space-y-1.5">
               {members.map((m) => (
                 <div key={m.id} className="flex items-center gap-2 text-sm">

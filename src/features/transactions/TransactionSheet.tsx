@@ -93,7 +93,13 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   useEffect(() => {
     if (whoBearsLoaded || !transaction || !allShares) return
     const mine = allShares.filter((s) => s.transaction_id === transaction.id)
-    if (mine.length > 0) {
+    if (mine.length === 1) {
+      // A single share row is exactly what the one-tap "entirely theirs"
+      // pick writes (D13) — read back as `sole`, not `custom`, so reopening
+      // it for edit shows the same one-tap state instead of an editable
+      // breakdown that happens to have one row.
+      setWhoBears({ mode: 'sole', soleBearerId: mine[0].member_id, custom: {} })
+    } else if (mine.length > 1) {
       const custom: Record<string, number> = {}
       for (const s of mine) custom[s.member_id] = s.share_amount
       setWhoBears({ mode: 'custom', custom })
@@ -167,16 +173,20 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   async function handleSave() {
     // The Who-bears panel is the Split's single source of truth now (D13):
     // "Just you" writes no rows at all — the not-a-debt case — "Split
-    // evenly" is computed fresh from the live amount, and Custom is typed
-    // verbatim. owner_id itself no longer carries any of that meaning; it's
-    // just who this transaction defaults to when there's no Split to read.
+    // evenly" and the one-tap "entirely theirs" (sole) are both computed
+    // fresh from the live amount here, and only a real Custom breakdown is
+    // typed verbatim. owner_id itself no longer carries any of that
+    // meaning; it's just who this transaction defaults to when there's no
+    // Split to read.
     const memberIds = members.map((m) => m.id)
     const custom =
       whoBears.mode === 'you'
         ? []
         : whoBears.mode === 'split'
           ? memberIds.map((id) => ({ member_id: id, share_amount: evenSplit(amountField.value, memberIds)[id] }))
-          : Object.entries(whoBears.custom).map(([member_id, share_amount]) => ({ member_id, share_amount }))
+          : whoBears.mode === 'sole'
+            ? [{ member_id: whoBears.soleBearerId!, share_amount: amountField.value }]
+            : Object.entries(whoBears.custom).map(([member_id, share_amount]) => ({ member_id, share_amount }))
 
     const input: TransactionInput = {
       date,
