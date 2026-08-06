@@ -256,7 +256,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
 
           <div className="space-y-1.5">
             <Label htmlFor="inst-note">Note (optional)</Label>
-            <Input id="inst-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input id="inst-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={() => setActiveAmount(false)} />
           </div>
         </div>
 

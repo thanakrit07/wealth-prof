@@ -484,7 +484,9 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
               §7.2) — only their order relative to each other changes here. */}
           <div className="space-y-1.5">
             <Label htmlFor="txn-note">Note</Label>
-            <Input id="txn-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            {/* Tapping in needs the system keyboard, not the amount keypad —
+                without closing it, both fight for the same screen space. */}
+            <Input id="txn-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={() => setKeypadOpen(false)} />
           </div>
 
           {!detailsOpen ? (
@@ -498,7 +500,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           ) : (
             <div className="space-y-1.5">
               <Label htmlFor="txn-description">Details (optional)</Label>
-              <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+              <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} onFocus={() => setKeypadOpen(false)} />
             </div>
           )}
         </div>

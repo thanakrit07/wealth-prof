@@ -39,20 +39,29 @@ export function evenSplit(amount: number, memberIds: string[]): Record<string, n
 }
 
 // D13/D14, §7.2 v3.5: replaces the Owner field. Defaults to "Just you" so
-// anyone not sharing sees no new work; opens a panel with the three cases
-// that cover every way a cost gets divided — including "I paid for their
-// thing", which is Custom with the other person alone at 100%.
+// anyone not sharing sees no new work; opens a panel with the cases that
+// cover every way a cost gets divided — a one-tap button per other member
+// for "this is entirely theirs" (recording something on their behalf, or
+// "I paid for their thing"), Split evenly, and Custom for anything uneven.
 export function WhoBearsField({ amount, members, selfId, value, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const memberIds = useMemo(() => members.map((m) => m.id), [members])
+  const others = useMemo(() => members.filter((m) => m.id !== selfId), [members, selfId])
+  // Which single other member (if any) the current Custom breakdown is
+  // "entirely theirs" for — drives both the collapsed label and which
+  // per-member button reads as selected.
+  const soleBearer = useMemo(() => {
+    if (value.mode !== 'custom') return null
+    const bearers = memberIds.filter((id) => (value.custom[id] ?? 0) > 0)
+    return bearers.length === 1 ? bearers[0] : null
+  }, [value, memberIds])
 
   const label = useMemo(() => {
     if (value.mode === 'you') return members.find((m) => m.id === selfId)?.display_name ?? 'You'
     if (value.mode === 'split') return 'Split evenly'
-    const bearers = memberIds.filter((id) => (value.custom[id] ?? 0) > 0)
-    if (bearers.length === 1) return members.find((m) => m.id === bearers[0])?.display_name ?? 'Custom'
+    if (soleBearer) return members.find((m) => m.id === soleBearer)?.display_name ?? 'Custom'
     return 'Custom'
-  }, [value, members, selfId, memberIds])
+  }, [value, members, selfId, soleBearer])
 
   const customTotal = Object.values(value.custom).reduce((sum, v) => sum + (v || 0), 0)
   const customMatches = Math.round(customTotal * 100) === Math.round(amount * 100)
@@ -66,6 +75,12 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
     } else {
       onChange({ mode, custom: {} })
     }
+  }
+
+  // One tap: "this belongs entirely to them" — previously meant picking them
+  // as Owner and reading it backwards; now it's Custom with just their row.
+  function selectSoleBearer(memberId: string) {
+    onChange({ mode: 'custom', custom: { [memberId]: amount } })
   }
 
   return (
@@ -84,20 +99,54 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
 
       {open && (
         <div className="mt-1.5 space-y-2.5 rounded-xl border bg-card p-2.5">
-          <div className="flex gap-1.5">
-            {(['you', 'split', 'custom'] as const).map((mode) => (
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => selectMode('you')}
+              className={cn(
+                'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
+                value.mode === 'you' ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
+              )}
+            >
+              Just you
+            </button>
+            {others.length > 0 && (
               <button
-                key={mode}
                 type="button"
-                onClick={() => selectMode(mode)}
+                onClick={() => selectMode('split')}
                 className={cn(
                   'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
-                  value.mode === mode ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
+                  value.mode === 'split' ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
                 )}
               >
-                {mode === 'you' ? 'Just you' : mode === 'split' ? 'Split evenly' : 'Custom'}
+                Split evenly
+              </button>
+            )}
+            {others.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => selectSoleBearer(m.id)}
+                className={cn(
+                  'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
+                  soleBearer === m.id ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
+                )}
+              >
+                {m.display_name}
               </button>
             ))}
+            {others.length > 0 && (
+              <button
+                type="button"
+                onClick={() => selectMode('custom')}
+                className={cn(
+                  'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
+                  value.mode === 'custom' && !soleBearer ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
+                )}
+              >
+                Custom
+              </button>
+            )}
           </div>
 
           {value.mode === 'custom' && (
