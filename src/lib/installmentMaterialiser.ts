@@ -1,6 +1,7 @@
 import { periodDate } from './finance/billingCycle'
 import type { Installment } from './installments'
 import { supabase } from './supabase'
+import { computeShareRows } from './transactionShares'
 
 // DESIGN.md §6.7/§4.5 (D11): an installment plan writes **every** period as
 // a real transaction the moment the plan exists — not just the periods due
@@ -42,15 +43,25 @@ export async function materialiseInstallmentsDue(
   const active = installments.filter((i) => i.status === 'active' && (i.card_id || i.account_id))
   if (active.length === 0) return 0
 
-  const { data: existing, error: existingError } = await supabase
-    .from('transactions')
-    .select('source_key')
-    .eq('household_id', householdId)
-    .eq('source', 'installment')
-    .is('deleted_at', null)
+  const [{ data: existing, error: existingError }, { data: members, error: membersError }, { data: cards, error: cardsError }, { data: accounts, error: accountsError }] =
+    await Promise.all([
+      supabase.from('transactions').select('source_key').eq('household_id', householdId).eq('source', 'installment').is('deleted_at', null),
+      supabase.from('household_members').select('id').eq('household_id', householdId),
+      supabase.from('cards').select('id, owner_id').eq('household_id', householdId),
+      supabase.from('accounts').select('id, owner_id').eq('household_id', householdId),
+    ])
   if (existingError) throw existingError
+  if (membersError) throw membersError
+  if (cardsError) throw cardsError
+  if (accountsError) throw accountsError
 
   const postedSet = new Set((existing ?? []).map((t) => t.source_key as string))
+  // D13: who fronted the money for each plan's own instrument, and who's in
+  // the household to split between — fetched once, reused for every period
+  // of every plan in this run.
+  const memberIds = (members ?? []).map((m) => m.id as string)
+  const cardOwner = new Map((cards ?? []).map((c) => [c.id as string, c.owner_id as string | null]))
+  const accountOwner = new Map((accounts ?? []).map((a) => [a.id as string, a.owner_id as string | null]))
 
   let posted = 0
   for (const inst of active) {
@@ -99,15 +110,36 @@ export async function materialiseInstallmentsDue(
     // Per plan, not one batch for all: a row Postgres refuses aborts the whole
     // statement, so batching every plan together lets one bad plan block
     // posting for all of them. upsert-ignore rather than insert because a
-    // period may have been posted by the other device mid-run.
-    const { error } = await supabase
+    // period may have been posted by the other device mid-run. .select()
+    // after ignoreDuplicates returns only the periods genuinely posted this
+    // run — the only ones that need a fresh Split (D13).
+    const { data: inserted, error } = await supabase
       .from('transactions')
       .upsert(rows, { onConflict: 'household_id,source_key', ignoreDuplicates: true })
+      .select('id, source_key')
     if (error) {
       console.error(`Could not post periods for installment "${inst.name}"`, error)
       continue
     }
     posted += rows.length
+
+    const frontingMemberId = cardBilled
+      ? (cardOwner.get(inst.card_id as string) ?? null)
+      : (accountOwner.get(inst.account_id as string) ?? null)
+    const amountBySourceKey = new Map(rows.map((r) => [r.source_key as string, r.amount as number]))
+    const shareRowsToInsert = (inserted ?? []).flatMap((t) => {
+      const amount = amountBySourceKey.get(t.source_key as string)
+      if (amount == null) return []
+      return computeShareRows({ kind: 'expense', ownerId: inst.owner_id, frontingMemberId, amount, memberIds }).map((r) => ({
+        household_id: householdId,
+        transaction_id: t.id as string,
+        ...r,
+      }))
+    })
+    if (shareRowsToInsert.length > 0) {
+      const { error: shareError } = await supabase.from('transaction_shares').insert(shareRowsToInsert)
+      if (shareError) console.error(`Could not write shares for installment "${inst.name}"`, shareError)
+    }
   }
 
   return posted

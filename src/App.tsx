@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
+import { ChevronLeft } from 'lucide-react'
 import { AppShell } from '@/components/layout/AppShell'
 import type { Tab } from '@/components/layout/AppShell'
+import { Button } from '@/components/ui/button'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ErrorScreen } from '@/components/ErrorScreen'
 import { AuthScreen } from './components/AuthScreen'
 import { HouseholdSetup } from './components/HouseholdSetup'
 import { ResetPasswordScreen } from './components/ResetPasswordScreen'
-import { OverviewScreen } from '@/features/home/OverviewScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
 import { AccountsScreen } from '@/features/accounts/AccountsScreen'
@@ -24,34 +25,33 @@ import { useSession } from './lib/useSession'
 function SignedInApp({ self }: { self: HouseholdMember }) {
   const [month, setMonth] = useUrlState('month', currentMonthKey())
   const [person, setPerson] = useUrlState('person', 'all')
-  // Transactions is the landing tab (DESIGN.md §7.1 v3.1): the daily habit
-  // is "open → jot what was spent → check what's recorded".
+  // Records is the landing tab (DESIGN.md §7.1 v3.5): the daily habit is
+  // "open → jot what was spent → check what's recorded". The url key stays
+  // 'transactions' so existing bookmarks/URL state keep working.
   const [tab, setTab] = useUrlState('tab', 'transactions')
   const [category, setCategory] = useUrlState('cat', '')
   const [quickAddOpen, setQuickAddOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [search, setSearch] = useState('')
+
+  // Records/Balances/Upcoming — the tab bar's own keys — mapped onto the
+  // URL's legacy tab names so an old bookmark for the removed Overview/Plan
+  // tabs still lands somewhere sensible instead of a blank screen.
+  const resolvedTab: Tab =
+    tab === 'accounts' ? 'balances' : tab === 'plan' ? 'upcoming' : tab === 'home' || tab === 'transactions' ? 'records' : (tab as Tab)
 
   const screens: Record<Tab, React.ReactNode> = {
-    home: (
-      <OverviewScreen
-        month={month}
-        person={person as PersonFilter}
-        onCategorySelect={(id) => {
-          setCategory(id)
-          setTab('transactions')
-        }}
-      />
-    ),
-    transactions: (
+    records: (
       <TransactionsScreen
         month={month}
         person={person as PersonFilter}
+        search={search}
         categoryId={category || null}
         onClearCategory={() => setCategory('')}
       />
     ),
-    accounts: <AccountsScreen />,
-    plan: <PlanScreen />,
-    settings: <SettingsScreen />,
+    balances: <AccountsScreen />,
+    upcoming: <PlanScreen />,
   }
 
   return (
@@ -63,15 +63,18 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
         onMonthChange={setMonth}
         person={person as PersonFilter}
         onPersonChange={(p) => setPerson(p)}
-        tab={tab as Tab}
+        tab={resolvedTab}
         onTabChange={(t) => setTab(t)}
         onQuickAdd={() => setQuickAddOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        search={search}
+        onSearchChange={setSearch}
       >
         {/* Inside the shell, so a screen that throws leaves the bottom nav
             usable — tapping any other tab is itself the recovery, and the
             resetKeys below clear the error when it happens. */}
         <ErrorBoundary
-          resetKeys={[tab]}
+          resetKeys={[resolvedTab]}
           fallback={(error, reset) => (
             <ErrorScreen
               error={error}
@@ -84,10 +87,23 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
             />
           )}
         >
-          {screens[tab as Tab] ?? screens.home}
+          {screens[resolvedTab] ?? screens.records}
         </ErrorBoundary>
       </AppShell>
       <TransactionSheet open={quickAddOpen} onOpenChange={setQuickAddOpen} />
+      {settingsOpen && (
+        <div className="fixed inset-0 z-30 flex flex-col bg-background">
+          <header className="sticky top-0 flex items-center gap-2 border-b bg-background px-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2">
+            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(false)} aria-label="Back">
+              <ChevronLeft className="size-5" />
+            </Button>
+            <h1 className="font-heading text-sm font-medium">Settings</h1>
+          </header>
+          <div className="flex-1 overflow-y-auto">
+            <SettingsScreen />
+          </div>
+        </div>
+      )}
     </HouseholdProvider>
   )
 }

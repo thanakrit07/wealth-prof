@@ -2,6 +2,13 @@ import { addMonths, endOfMonth, format, parse, startOfMonth } from 'date-fns'
 
 const MONTH_KEY = 'yyyy-MM'
 
+// ADR-0005: years are displayed as Buddhist Era, in full ("2569", never "69" —
+// that reads as 1969 once the month name is in English). This is a display
+// conversion only — every stored or exchanged date stays Gregorian.
+export function toBuddhistYear(ceYear: number): number {
+  return ceYear + 543
+}
+
 export function currentMonthKey(): string {
   return format(new Date(), MONTH_KEY)
 }
@@ -11,7 +18,8 @@ export function shiftMonth(monthKey: string, delta: number): string {
 }
 
 export function monthLabel(monthKey: string): string {
-  return format(parse(monthKey, MONTH_KEY, new Date()), 'MMMM yyyy')
+  const date = parse(monthKey, MONTH_KEY, new Date())
+  return `${format(date, 'MMMM')} ${toBuddhistYear(date.getFullYear())}`
 }
 
 // "20 Jul" — for compact date and billing-cycle range labels.

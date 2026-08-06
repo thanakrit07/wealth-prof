@@ -6,6 +6,10 @@
 >
 > **v3 changes (2026-07-31, after real phase-1 use):** transaction entry redesigned after the **Money Manager** app, which the user prefers over the v2 quick-add — a field-form sheet with pickers in a fixed bottom panel and an in-app calculator keypad (D9); two-level categories (D10); card-billed installment periods materialise as transactions automatically and every card gets a per-cycle statement view, replacing manual "mark period paid" (D11).
 >
+> **v3.5 changes (2026-08-05, after grilling the UX):** the bottom nav becomes **three tabs split by time horizon** — Records (this month) / Balances (now) / Upcoming (ahead) — Overview dissolving into the head of Records and Settings moving to a ⚙ in the top bar ([ADR-0004](./adr/0004-three-tabs-by-time-horizon.md)); the interface is **English with Buddhist-Era years**, which retires §7.4's never-implemented "entirely in Thai" rule, forces the app to own its date picker, and drops the bundled Mitr/Prompt faces for the platform's own ([ADR-0005](./adr/0005-english-chrome-buddhist-years-system-fonts.md)); the shipped entry form is declared to supersede §7.2's sketch, with the Owner row becoming **Who bears** (§7.2); and sharing, debts and destructive-action UI get their own §7.5. Colour is deliberately left untouched pending a separate pass.
+>
+> **v3.4 changes (2026-08-05, after grilling the transaction model):** sharing rebuilt around **explicit Splits** that may be uneven, replacing `owner_id is null` as the way to say "shared" (D13); the person filter now means what each person **bears** rather than which bucket a row sits in (D14); Installment Plans become immutable, with two delete scopes (D15); a Debt counts only once its transaction is confirmed and due (D16). **D12 — debts between members, shipped in migrations 0022–0023 — is recorded in §1.2 here for the first time**; until now its reasoning lived only in SQL comments. Decisions a reader would otherwise mistake for bugs now have their own records in [docs/adr/](./adr/): why installments post ahead while recurring does not ([ADR-0001](./adr/0001-installments-post-ahead-recurring-does-not.md)), why splits are explicit and income is never split ([ADR-0002](./adr/0002-splits-are-explicit-income-is-not-split.md)), and why a repayment need not equal what it clears ([ADR-0003](./adr/0003-repayment-amount-is-independent-of-what-it-clears.md)). The project's vocabulary lives in [CONTEXT.md](../CONTEXT.md).
+>
 > **v3.1 changes (2026-07-31, navigation redesign):** Transactions becomes the landing tab (the user opens the app to jot and check entries); the month/person header renders only on tabs it applies to, and the month label opens a month-year picker; Home becomes **Overview** with a card-bills-due-this-month section (per billing cycle, tied to the month filter) and a collapsed category rollup; category icons become a nameless grid plus **emoji** as custom icons; stack decision recorded: stay TS + Supabase, self-maintainability via [ARCHITECTURE.md](./ARCHITECTURE.md) instead of a Go monorepo.
 
 ---
@@ -33,6 +37,11 @@
 | **D9** *(v3)* | v2 quick-add: amount input first, system numeric keyboard, category icon grid in a scrolling drawer | On iOS the system keyboard shrinks the viewport and shoves the whole drawer up; the user must dismiss it and scroll to reach every other field. Recurring/installment entry lives in separate screens, so "coffee" and "new phone on 10-month plan" need different flows | **Money Manager-style entry form** (§7.2): stacked field rows, every picker (including the amount keypad) opens in a **fixed bottom panel** — the system keyboard opens only for free-text fields. The keypad is in-app with `+ − × ÷ =`. A Rep/Inst. control on the form creates a recurring rule or an installment inline |
 | **D10** *(v3)* | Flat category list | Real usage wants "Food → coffee / restaurant / delivery" — one flat level either explodes into dozens of tiles or loses the detail; Money Manager's two-level picker is the model | Two-level categories: `parent_id` on `categories`, max depth 1 (§4.2). Transactions may point at a main or a sub; reports roll up to mains and drill down into subs |
 | **D11** *(v3)* | Card-billed installment periods wait for a manual "mark period paid" tap | The charge hits the real statement whether or not anyone taps — un-marked periods make the app's cycle total drift from the statement, which is exactly the drift D3 was built to kill | **Auto-materialise** card-billed installment periods as transactions on their period date (same idempotent engine as D8), and give every card a **statement view**: its transactions grouped per billing cycle with the cycle total, due date and paid status (§6.7, §7.3) |
+| **D12** *(v3.3)* | Every expense belongs to one person, or to nobody | One person fronts money for both constantly — half the groceries, or the other's own shopping on their card. Neither is expressible, and nothing records paying each other back | A **Split** records who consumed a transaction; a **Debt** is any portion borne by someone other than the owner of the paying instrument. Repayment is an ordinary `transfer` that the cleared Debts point at, so the ledger is the audit trail and there is no parallel record to drift from it (migrations 0022–0023) |
+| **D13** *(v3.4)* | "Shared" means `owner_id is null`, and a trigger divides the amount evenly between all members | 70/30 cannot be expressed at all, and "we share this" is indistinguishable from "nobody said whose this is" — which is why `debt_exempt` had to be bolted on to stop imported history opening as a wall of debts | **Splits are written at entry, not inferred**, and portions need not be equal. Income cannot be split: it lands in one instrument and belongs to its owner. `debt_exempt` and the even-division trigger are removed — [ADR-0002](./adr/0002-splits-are-explicit-income-is-not-split.md) |
+| **D14** *(v3.4)* | The person filter is a bucket: P1 / P2 / Shared / All | Selecting yourself hides your half of every shared cost, so the headline figure is not what you spent. The Overview already computes it the other way for its per-person rows, so one screen carries two meanings of "person" | The filter means **Borne** everywhere: `[A｜B｜All]`, where A + B = All and a shared row appears under both people at each one's portion. Someone who paid for something they bear no part of sees it on the instrument's own screens, never in their spending totals |
+| **D15** *(v3.4)* | An Installment Plan can be edited after its periods are posted | Editing needs propagation rules for every combination of due / paid / hand-edited period, and gets them wrong quietly | **Plans are immutable — delete only.** Deleting a plan removes only periods that are not yet Cleared or are still to come; deleting a single period may remove anything, warning first and undoing that period's repayment in the same action. A posted period is an ordinary transaction, so its own Split stays editable |
+| **D16** *(v3.4)* | A Debt exists the moment its share row exists | Unconfirmed recurring rows raise debts from estimated amounts, and a plan's future periods raise the entire plan's debt on day one — ฿10,000 owed for a phone before a single baht has moved | A Debt counts only once its transaction is **confirmed and due** (`confirmed` and `date <= current_date` in `v_share_debts`). A repayment's amount is independent of the debts it clears — [ADR-0003](./adr/0003-repayment-amount-is-independent-of-what-it-clears.md) |
 
 ### 1.3 Pain point → the feature that answers it
 
@@ -557,6 +566,8 @@ current balance = anchor_balance
 
 For installments billed directly to an account, marking a period paid always creates the paired transaction (`installment_payments.transaction_id`). That transaction is the only thing that moves the balance, so there is no path to double counting or to silent drift.
 
+**Not built yet, and there is a trap waiting for whoever builds it** *(v3.4)*. `AccountsScreen` currently displays `anchor_balance` raw — nothing sums transactions against it. When this is implemented, the sum must also be bounded by `date <= today`: installment periods are posted for the whole plan up front ([ADR-0001](./adr/0001-installments-post-ahead-recurring-does-not.md)), so an unbounded sum subtracts payments that have not happened yet and reports a balance that is short by the rest of the plan. Every figure that adds transactions up over time inherits the same requirement.
+
 ### 6.4 Interest rates and the payoff plan
 
 **Unit normalisation.** The source sheet mixes units: "installment 0.74%" is per *month*, while a card's "9.99%" style rate is per *year*. Every rate in the schema is stored as **% per year**. The import converts monthly figures with `annual = monthly × 12`, and the installment form asks explicitly which unit the user is entering. Without this, avalanche ranking silently puts a 0.74%/month plan (8.9%/yr) below a 5%/yr card.
@@ -620,26 +631,55 @@ materialiseInstallmentsDue(installments, today): Transaction[]
 
 ## 7. UX design
 
-### 7.1 Screen structure (mobile-first) — v3.1
+### 7.1 Screen structure (mobile-first) — v3.5
+
+Three tabs, split by **time horizon** rather than by the kind of object each holds
+([ADR-0004](./adr/0004-three-tabs-by-time-horizon.md)). Which horizon a screen
+belongs to is what decides whether the month header appears, so there is one rule
+to remember instead of one per screen.
 
 ```
-┌──────────────────────────────┐
-│  ‹ Jul 2026 ›  [P1|P2|Shared|All]   ← header only on Transactions/Overview
-│                              │        (tap the month → month-year picker)
-│         tab content          │
-│                              │
-│                        (+)   │  ← FAB, floating on every tab
-├──────────────────────────────┤
-│ Txns  Overview  Accounts  Plan  Settings │  ← 5-tab bottom nav
-└──────────────────────────────┘
+┌────────────────────────────────────┐
+│  🔍      ‹ Aug 2569 ›         ⚙    │  ← Records only: search, month, settings
+│  [ You ][ Partner ][ All ]         │  ← Records only: who bears (§7.5)
+├────────────────────────────────────┤
+│                                    │
+│            tab content             │
+│                              (+)   │  ← FAB, on every tab
+├────────────────────────────────────┤
+│   Records  │  Balances  │ Upcoming │  ← 3-tab bottom nav
+└────────────────────────────────────┘
 ```
 
-* **Transactions is the landing tab** *(v3.1)* — the observed daily habit is "open → jot what was spent → check what's been recorded", so the ledger comes first; the old Home is renamed **Overview** and moves to slot two.
-* **The month/person header renders only on the tabs it filters** *(v3.1)*: Transactions and Overview. Accounts shows current state and Plan is forward-looking — a month filter there was noise. The month/person state itself stays global and URL-persisted, so switching tabs never resets it.
-* **Month-year picker** *(v3.1)*: tapping the month label opens a drawer with a year stepper and a 12-month grid plus a "This month" shortcut (the Money Manager pattern) — replaces tapping ‹ twelve times to reach last year.
+| Tab | Horizon | Holds | Month header |
+|---|---|---|---|
+| **Records** | this month | month summary (one line, expands to the per-person split), category rollup (collapsed), review strip, day-grouped ledger | **yes** |
+| **Balances** | right now | accounts and cash, credit cards, **debts between members** and the repayment log | no |
+| **Upcoming** | ahead | card bills for the next six months, installment plans, recurring rules, later budgets and the payoff plan | no |
+
+* **Records is the landing tab** — the daily habit is "open → jot → check what's
+  been recorded", and both halves of that now live on one screen: the old Overview
+  is no longer a tab but the head of the ledger, in the manner of Money Manager.
+* **The month summary is a single line** (`In 52,000 · Out 38,420 · +13,580`),
+  tapping it expands the per-person breakdown; the category rollup below it is one
+  collapsed row. Both remember whether they were left open. Three lines of summary
+  pushed the first transaction too far down the screen to check at a glance, which
+  is the one thing the daily habit needs.
+* **Settings leaves the tab bar** for a ⚙ in the top right of every tab — it is
+  opened about monthly, and a tab is expensive real estate. Search is a permanent
+  icon in the top left of Records, the only tab with anything to search.
+* **Month-year picker**: tapping the month label opens a drawer with a year
+  stepper and a 12-month grid plus a "This month" shortcut (the Money Manager
+  pattern).
 * Desktop: the bottom nav becomes a sidebar and content goes two-column. Same components throughout.
 
 ### 7.2 Transaction entry: the most important flow (principle 2) — v3, Money Manager style (D9)
+
+> **v3.5: the built form supersedes the sketch below.** What shipped is not the "stacked field rows over one swapping panel" layout drawn here — the amount sits large at the top, the category grid is open in the form the whole time, and only the keypad uses the bottom panel. It hits the same four-tap target and has a year of daily use behind it, so it is the design of record; the layout drawing below is kept for the reasoning that produced it, not as a target to build toward. Three changes land on it:
+>
+> * **The Owner row becomes the "Who bears" row.** `owner_id` no longer means shared (D13), so the row's question changes from *whose is this* to *who carries it*. It defaults to **You**, so anyone not sharing sees no new work. Tapping it opens a panel with **Just you / Split evenly / Custom**, where Custom is two editable amounts that must total the transaction — picking the other person alone is the "I paid for their thing" case, which previously meant setting the owner to them and reading it backwards.
+> * **Rep/Inst is an icon beside the date**, as the sketch always intended and as was never built: it turns the entry being typed into a recurring rule or an installment plan without leaving the sheet.
+> * **The date opens the in-app picker** in that same bottom panel (§7.4), not the system one.
 
 The v2 quick-add (amount-first with the system numpad auto-opening over a scrolling drawer) failed in real use on iOS: the keyboard shrinks the visual viewport, the drawer gets shoved up, and reaching any other field means dismissing the keyboard and scrolling back. v3 adopts the layout of the **Money Manager** app, which the user knows and prefers:
 
@@ -687,12 +727,29 @@ Transfers swap the category panel for a from/to instrument picker, as before. Ca
   * **Deleting is swipe-then-confirm** *(v3.1)*: rows reveal Delete on swipe-left (same gesture as the transaction ledger) rather than carrying a permanently visible destructive button, and the confirmation names both consequences that aren't guessable from a trash icon — a main takes its sub-categories with it, and anything still referenced is archived instead of removed.
   * Reordering only ever swaps `sort_order` within the same level (mains among mains, a main's subs among each other) — it can't be used to re-parent a category; re-parenting (moving a sub under a different main) is not supported in v3.
 
-### 7.4 Language and formatting
+### 7.4 Language and formatting — v3.5
 
-* The UI is entirely in Thai. Amounts are formatted `1,234.50` in baht; dates use the abbreviated Buddhist-era form ("21 ก.ค. 69").
-* Each person has a colour (person 1 blue, person 2 orange, shared purple) used consistently in chips, card borders and charts. It is stored on `household_members.color`.
+* **The interface is in English; the years are Buddhist Era** ([ADR-0005](./adr/0005-english-chrome-buddhist-years-system-fonts.md)). This replaces the v3 rule that "the UI is entirely in Thai", which was never implemented — the whole of `src/` held twelve lines of Thai while every label was English. Category names, notes and member names are whatever the user typed, in whichever language.
+* **Dates** are written with the year in full: `5 Aug 2569`, `Aug 2569`. Not abbreviated to `69` — that reads as 1969 once the month name is in English. BE is a **display conversion only**: everything stored, exchanged or held in URL state stays ISO `yyyy-MM-dd` in CE.
+* **Date entry uses the app's own picker**, never `<input type="date">`, because a native picker renders the device locale's calendar and would disagree with every other date on screen. On the transaction form it opens in the panel below, like the amount keypad.
+* **Amounts** are formatted `1,234.50` and set in tabular figures wherever they line up in a column — a ledger whose digits shift width is materially harder to scan.
+* **Typography is the platform's own UI font.** The bundled Mitr and Prompt faces are dropped: they were carried for Thai chrome that no longer exists, and a rounded display face is at its worst in small dense rows of figures.
+* Each person has a colour (person 1 blue, person 2 orange) used consistently in chips, card borders and charts, stored on `household_members.color`. There is no longer a third "shared" colour — sharedness is a property of a transaction's Split (D13), not a third owner.
 
-*(These design documents are in English for implementation; the product UI is Thai.)*
+### 7.5 Sharing, debts and destructive actions — v3.5
+
+**The person filter means Borne** (D14). Three chips — `You · Partner · All` — where a person's figure is their own spending plus their share of anything split, so the two people's totals add up to All. Someone who paid for something they bear no part of does not see it here at all; it appears on the paying instrument's own screens, where the question is what left the account rather than what was consumed.
+
+**A shared row shows the full amount as its primary figure** and the viewer's share as a secondary line (`1,000` over `yours 500`). Showing only the share would misstate what the thing cost.
+
+**Debts live on Balances** with the settle-up sheet and the repayment log. The sheet already lists both directions and moves only the difference; the amount becomes editable, and when it disagrees with what was ticked the sheet says so on its own line rather than hiding it ([ADR-0003](./adr/0003-repayment-amount-is-independent-of-what-it-clears.md)). Settling in cash needs a cash account on both sides; a member with no instrument at all currently fails with a raw database error and must instead be told what to add.
+
+**Destructive actions are swipe-then-confirm, and the dialog names the consequence that a bin icon cannot** — the house pattern already used for accounts and categories (§7.3). Two cases carry surprises worth spelling out:
+
+* **Deleting an Installment Plan does not delete all of it** (D15). Periods already settled stay; only what is still open or still ahead goes. The confirm button carries the count — "Delete 7" — because the partial behaviour is not guessable.
+* **Deleting a Period that has already been repaid** releases that repayment. If the transfer covered other debts too, it stays and simply shows more cash than debts cleared. If it covered nothing else, the dialog offers an **unticked** "delete that transfer too" — unticked because the money genuinely moved, and removing it silently would misstate the account balance.
+
+*(These design documents are in English for implementation, and so now is the product UI.)*
 
 ---
 

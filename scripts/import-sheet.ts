@@ -4,10 +4,12 @@
 // Usage:
 //   npx tsx scripts/import-sheet.ts --dir ./import-data --dry-run   (writes nothing)
 //   npx tsx scripts/import-sheet.ts --dir ./import-data
-//   npx tsx scripts/import-sheet.ts --dir ./import-data --debt-from 2026-08-01
-//     (rows on/after this date track member debts normally; everything
-//     older is written debt_exempt so history doesn't open as a wall of
-//     owed money — omit the flag to exempt the whole import)
+//
+// Every imported row belongs to a single person (D13): a sheet row that
+// names nobody is attributed to whoever runs the import (IMPORT_EMAIL), not
+// left ambiguous. Splits are something the app writes explicitly when a
+// transaction is entered as shared, and importing never does that — so
+// nothing this script writes can open as a debt.
 //
 // Required env vars (put in .env.local, already used by the app):
 //   VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
@@ -47,26 +49,16 @@ import { periodDate } from '../src/lib/finance/billingCycle.ts'
 interface Args {
   dir: string
   dryRun: boolean
-  debtFrom: string | null
 }
 
 function parseArgs(): Args {
   const dirFlagIndex = process.argv.indexOf('--dir')
   const dir = dirFlagIndex >= 0 ? process.argv[dirFlagIndex + 1] : './import-data'
-  // Most sheet rows carry no owner (resolveOwner returns null for a blank
-  // cell), which reads as a shared transaction (0022) -- so without this,
-  // every import turns years of history into open debts the moment the
-  // member-debt trigger runs. Rows on or after --debt-from track debts
-  // normally; everything older is written debt_exempt. Omit the flag and
-  // the whole import is exempt -- opt in once you're ready to go live with
-  // debt tracking, rather than opting out row by row after the fact.
-  const debtFromFlagIndex = process.argv.indexOf('--debt-from')
-  const debtFrom = debtFromFlagIndex >= 0 ? process.argv[debtFromFlagIndex + 1] : null
-  return { dir, dryRun: process.argv.includes('--dry-run'), debtFrom }
+  return { dir, dryRun: process.argv.includes('--dry-run') }
 }
 
 async function main() {
-  const { dir, dryRun, debtFrom } = parseArgs()
+  const { dir, dryRun } = parseArgs()
   const url = process.env.VITE_SUPABASE_URL
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY
   const email = process.env.IMPORT_EMAIL
@@ -85,7 +77,9 @@ async function main() {
     .eq('user_id', userId)
     .single()
   if (selfError) throw selfError
+  if (!self) throw new Error('Could not resolve the household member for IMPORT_EMAIL')
   const householdId = self.household_id as string
+  const selfId = self.id as string
 
   const { data: members } = await supabase
     .from('household_members')
@@ -202,9 +196,21 @@ async function main() {
     return data.id as string
   }
 
+  // For instruments only (accounts/cards) -- null is a real state there,
+  // meaning "nobody in particular", unrelated to who a transaction belongs
+  // to below.
   function resolveOwner(name: string): string | null {
     if (!name) return null
     return memberByName.get(name.trim().toLowerCase()) ?? null
+  }
+
+  // D13: every transaction and installment plan belongs to exactly one
+  // person. A named owner resolves as usual; an unnamed one is attributed to
+  // whoever is running the import, never left null -- there is no "shared"
+  // reading left for import to fall back on (splits are written explicitly,
+  // at entry, never here).
+  function resolveTransactionOwner(name: string): string {
+    return resolveOwner(name) ?? selfId
   }
 
   function resolveCategory(name: string, kind: 'income' | 'expense'): string | null {
@@ -330,7 +336,7 @@ async function main() {
         const { annualRate, isCashAdvance } = parseInterestRate(note)
         const instrumentName = pick(row, ['account', 'card', 'paying account', 'บัญชี/บัตร'])
         const instrument = resolveInstrument(instrumentName)
-        const owner = resolveOwner(pick(row, ['owner', 'เจ้าของ', 'person']))
+        const owner = resolveTransactionOwner(pick(row, ['owner', 'เจ้าของ', 'person']))
         const categoryId = resolveCategory(pick(row, ['category', 'หมวดหมู่']), 'expense')
 
         if (!name || !startDate || !totalPeriods || !monthlyAmount) throw new Error('missing required field')
@@ -409,7 +415,7 @@ async function main() {
     date: string
     label: string
     categoryName: string
-    owner: string | null
+    owner: string
     accountName: string
     instrument: { accountId: string | null; cardId: string | null }
     kind: 'income' | 'expense' | 'transfer'
@@ -429,7 +435,7 @@ async function main() {
         const incomeAmount = parseNumber(pick(row, ['income', 'income amount', 'รายรับ']))
         const expenseAmount = parseNumber(pick(row, ['expense', 'expense amount', 'รายจ่าย']))
         const accountName = pick(row, ['account', 'บัญชี'])
-        const owner = resolveOwner(pick(row, ['owner', 'person', 'เจ้าของ']))
+        const owner = resolveTransactionOwner(pick(row, ['owner', 'person', 'เจ้าของ']))
         const categoryName = pick(row, ['category', 'หมวดหมู่'])
         if (isInstallmentCategory(categoryName)) {
           // Installment periods are materialised by the app from
@@ -525,7 +531,6 @@ async function main() {
         owner_id: p.owner,
         from_account_id: p.instrument.accountId,
         from_card_id: p.instrument.cardId,
-        debt_exempt: debtFrom === null || p.date < debtFrom,
       }
       if (p.kind !== 'transfer') {
         // Sheet rows left without a category still need one (category_id is

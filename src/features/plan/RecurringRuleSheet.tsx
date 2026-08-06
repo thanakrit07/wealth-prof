@@ -8,11 +8,13 @@ import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AmountField } from '@/components/AmountField'
+import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
 import { OwnerSelect } from '@/components/OwnerSelect'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
+import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useHousehold } from '@/lib/HouseholdContext'
 import type { MonthEndRule, RecurrenceFreq } from '@/lib/finance/recurrence'
 import {
@@ -37,23 +39,26 @@ function today(): string {
 interface Props {
   rule: RecurringRule | null
   onClose: () => void
+  // Set only when opened from Rep/Inst on the transaction form (D9) — what
+  // was already typed there, carried over rather than retyped.
+  prefill?: EntryPrefill
 }
 
-export function RecurringRuleSheet({ rule, onClose }: Props) {
+export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   const { householdId, self } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const create = useCreateRecurringRule(householdId)
   const update = useUpdateRecurringRule(householdId)
   const remove = useDeleteRecurringRule(householdId)
 
-  const [name, setName] = useState(rule?.name ?? '')
-  const [kind, setKind] = useState<TransactionKind>(rule?.kind ?? 'expense')
-  const amount = useAmountEntry(rule ? String(rule.amount) : '')
+  const [name, setName] = useState(rule?.name ?? prefill?.name ?? '')
+  const [kind, setKind] = useState<TransactionKind>(rule?.kind ?? prefill?.kind ?? 'expense')
+  const amount = useAmountEntry(rule ? String(rule.amount) : prefill ? String(prefill.amount) : '')
   const [keypadOpen, setKeypadOpen] = useState(false)
-  const [categoryId, setCategoryId] = useState<string | null>(rule?.category_id ?? null)
+  const [categoryId, setCategoryId] = useState<string | null>(rule?.category_id ?? prefill?.categoryId ?? null)
   const [from, setFrom] = useState<Instrument>({
-    accountId: rule?.from_account_id ?? null,
-    cardId: rule?.from_card_id ?? null,
+    accountId: rule?.from_account_id ?? prefill?.from.accountId ?? null,
+    cardId: rule?.from_card_id ?? prefill?.from.cardId ?? null,
   })
   const [to, setTo] = useState<Instrument>({
     accountId: rule?.to_account_id ?? null,
@@ -61,14 +66,14 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
   })
   // Same trap as TransactionSheet: null means "shared" (§4.2), so a nullish
   // fallback would quietly reassign a shared rule to whoever edits it.
-  const [ownerId, setOwnerId] = useState<string | null>(rule ? rule.owner_id : self.id)
+  const [ownerId, setOwnerId] = useState<string | null>(rule ? rule.owner_id : (prefill?.ownerId ?? self.id))
   const [freq, setFreq] = useState<RecurrenceFreq>(rule?.freq ?? 'monthly')
   const [interval, setIntervalValue] = useState(String(rule?.interval ?? 1))
   const [dayOfMonth, setDayOfMonth] = useState(String(rule?.day_of_month ?? 1))
   const [monthOfYear, setMonthOfYear] = useState(String(rule?.month_of_year ?? 1))
   const [weekday, setWeekday] = useState(String(rule?.weekday ?? 1))
   const [monthEnd, setMonthEnd] = useState<MonthEndRule>(rule?.month_end ?? 'clamp')
-  const [startDate, setStartDate] = useState(rule?.start_date ?? today())
+  const [startDate, setStartDate] = useState(rule?.start_date ?? prefill?.date ?? today())
   const [endDate, setEndDate] = useState(rule?.end_date ?? '')
   const [autoPost, setAutoPost] = useState(rule?.auto_post ?? false)
   const [variableAmount, setVariableAmount] = useState(rule?.variable_amount ?? false)
@@ -262,11 +267,11 @@ export function RecurringRuleSheet({ rule, onClose }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="rule-start">Starts</Label>
-              <Input id="rule-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <DateField id="rule-start" value={startDate} onChange={setStartDate} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="rule-end">Ends (optional)</Label>
-              <Input id="rule-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <DateField id="rule-end" value={endDate} onChange={setEndDate} clearable />
             </div>
           </div>
 

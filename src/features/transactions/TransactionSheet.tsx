@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, ChevronDown, MoreHorizontal, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, CalendarSync, ChevronDown, MoreHorizontal, Repeat, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,17 +8,15 @@ import { Label } from '@/components/ui/label'
 import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AmountField } from '@/components/AmountField'
+import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
-import { OwnerSelect } from '@/components/OwnerSelect'
-import { Switch } from '@/components/ui/switch'
+import { evenSplit, WhoBearsField, type WhoBearsValue } from '@/components/WhoBearsField'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
-import { useAccounts } from '@/lib/accounts'
-import { useCards } from '@/lib/cards'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { useCategories, type Category } from '@/lib/categories'
 import { useCategoryUsage } from '@/lib/categoryUsage'
-import { formatBaht } from '@/lib/format'
+import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { supabase } from '@/lib/supabase'
 import {
@@ -29,7 +27,10 @@ import {
   type TransactionInput,
   type TransactionKind,
 } from '@/lib/transactions'
+import { syncTransactionShares, useTransactionShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
+import { InstallmentSheet } from '@/features/installments/InstallmentSheet'
+import { RecurringRuleSheet } from '@/features/plan/RecurringRuleSheet'
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
@@ -48,8 +49,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const { householdId, self, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const { data: usage } = useCategoryUsage(householdId)
-  const { data: accounts } = useAccounts(householdId)
-  const { data: cards } = useCards(householdId)
+  const { data: allShares } = useTransactionShares(householdId)
   const queryClient = useQueryClient()
   const create = useCreateTransaction(householdId)
   const update = useUpdateTransaction(householdId)
@@ -67,17 +67,34 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     accountId: transaction?.to_account_id ?? null,
     cardId: transaction?.to_card_id ?? null,
   })
-  // `?? self.id` would be wrong: null is a real owner value meaning "shared"
-  // (§4.2), so a nullish fallback silently reassigns every shared transaction
-  // to whoever opened it for editing — and saving that drops its split.
-  const [ownerId, setOwnerId] = useState<string | null>(transaction ? transaction.owner_id : self.id)
   const [date, setDate] = useState(transaction?.date ?? today())
   const [description, setDescription] = useState(transaction?.description ?? '')
   const [note, setNote] = useState(transaction?.note ?? '')
-  const [debtExempt, setDebtExempt] = useState(transaction?.debt_exempt ?? false)
+
+  // D13/D14: Who bears replaces Owner. Defaults to "Just you"; when editing
+  // a transaction that already has a Split, it's loaded once its shares
+  // arrive (they're a separate fetch, so this can't be the useState
+  // initialiser — mirrors the category-expand effect below).
+  const [whoBears, setWhoBears] = useState<WhoBearsValue>({ mode: 'you', custom: {} })
+  const [whoBearsLoaded, setWhoBearsLoaded] = useState(false)
+  useEffect(() => {
+    if (whoBearsLoaded || !transaction || !allShares) return
+    const mine = allShares.filter((s) => s.transaction_id === transaction.id)
+    if (mine.length > 0) {
+      const custom: Record<string, number> = {}
+      for (const s of mine) custom[s.member_id] = s.share_amount
+      setWhoBears({ mode: 'custom', custom })
+    }
+    setWhoBearsLoaded(true)
+  }, [whoBearsLoaded, transaction, allShares])
+
+  // Rep/Inst (D9, §7.2): turns what's typed here into a Recurring Rule or an
+  // Installment Plan instead of a one-off transaction.
+  const [repInstOpen, setRepInstOpen] = useState(false)
+  const [creating, setCreating] = useState<'recurring' | 'installment' | null>(null)
 
   // Progressive disclosure (DESIGN.md §7.2): the grid starts at 2 rows,
-  // owner/date collapse into a one-line summary, and description (the
+  // who-bears/date collapse into a one-line summary, and description (the
   // secondary "+ Add details" field) is hidden unless already filled in
   // (when editing) or explicitly opened. Note is the primary ledger label
   // (0020) and stays always visible — see the input further down.
@@ -139,28 +156,16 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
         ? tiles.length - 1
         : Math.min(Math.floor(expandedTileIndex / 4) * 4 + 3, tiles.length - 1)
 
-  const ownerLabel = ownerId ? (members.find((m) => m.id === ownerId)?.display_name ?? 'Shared') : 'Shared'
+  const whoBearsLabel =
+    whoBears.mode === 'you'
+      ? self.display_name
+      : whoBears.mode === 'split'
+        ? 'Split evenly'
+        : (() => {
+            const bearers = members.filter((m) => (whoBears.custom[m.id] ?? 0) > 0)
+            return bearers.length === 1 ? bearers[0].display_name : 'Custom'
+          })()
   const dateLabel = date === today() ? 'Today' : date
-
-  // The database (0022) writes transaction_shares itself, for every save —
-  // create, edit, import, recurring, installment — so the form never has to.
-  // What it does need to do is tell the person what's about to happen: two
-  // ways a transaction can turn into a debt (0023's debt_kind), from
-  // whichever instrument is currently selected.
-  const frontingMemberId =
-    (from.accountId ? accounts?.find((a) => a.id === from.accountId)?.owner_id : null) ??
-    (from.cardId ? cards?.find((c) => c.id === from.cardId)?.owner_id : null) ??
-    null
-  const isSplit = kind !== 'transfer' && ownerId === null && members.length > 1
-  const isBorrow =
-    kind !== 'transfer' && ownerId !== null && frontingMemberId !== null && frontingMemberId !== ownerId
-  const debtPreview = isSplit
-    ? amountField.value > 0
-      ? `Split evenly · ${formatBaht(amountField.value / members.length)} each (${members.length})`
-      : null
-    : isBorrow
-      ? `On ${members.find((m) => m.id === frontingMemberId)?.display_name ?? 'their'}'s card/account — counts as owing ${formatBaht(amountField.value)}`
-      : null
 
   const canSave =
     amountField.value > 0 &&
@@ -195,10 +200,35 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     setExpandedMainId(null)
     setMetaOpen(false)
     setDetailsOpen(false)
-    setDebtExempt(false)
+    setWhoBears({ mode: 'you', custom: {} })
+  }
+
+  function buildPrefill(): EntryPrefill {
+    return {
+      name: note || description,
+      kind,
+      categoryId: kind === 'transfer' ? null : categoryId,
+      amount: amountField.value,
+      ownerId: self.id,
+      from,
+      date,
+    }
   }
 
   async function handleSave() {
+    // The Who-bears panel is the Split's single source of truth now (D13):
+    // "Just you" writes no rows at all — the not-a-debt case — "Split
+    // evenly" is computed fresh from the live amount, and Custom is typed
+    // verbatim. owner_id itself no longer carries any of that meaning; it's
+    // just who this transaction defaults to when there's no Split to read.
+    const memberIds = members.map((m) => m.id)
+    const custom =
+      whoBears.mode === 'you'
+        ? []
+        : whoBears.mode === 'split'
+          ? memberIds.map((id) => ({ member_id: id, share_amount: evenSplit(amountField.value, memberIds)[id] }))
+          : Object.entries(whoBears.custom).map(([member_id, share_amount]) => ({ member_id, share_amount }))
+
     const input: TransactionInput = {
       date,
       kind,
@@ -206,22 +236,32 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
       categoryKind: kind === 'transfer' ? null : (kind as 'income' | 'expense'),
       description,
       amount: amountField.value,
-      ownerId,
+      ownerId: self.id,
       fromAccountId: from.accountId,
       fromCardId: from.cardId,
       toAccountId: kind === 'transfer' ? to.accountId : null,
       toCardId: kind === 'transfer' ? to.cardId : null,
       note: note || null,
-      debtExempt,
+    }
+    const shareParams = {
+      householdId,
+      kind,
+      ownerId: self.id,
+      frontingMemberId: null,
+      amount: amountField.value,
+      memberIds,
+      custom,
     }
     try {
       if (transaction) {
         // Saving an unconfirmed (generated) row counts as reviewing it.
         await update.mutateAsync({ id: transaction.id, input, confirm: !transaction.confirmed })
+        await syncTransactionShares({ ...shareParams, transactionId: transaction.id })
         onOpenChange(false)
         return
       }
       const id = await create.mutateAsync(input)
+      await syncTransactionShares({ ...shareParams, transactionId: id })
       resetForNextEntry()
       onOpenChange(false)
       toast.success('Transaction saved', {
@@ -249,6 +289,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   }
 
   return (
+    <>
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent>
         <DrawerHeader>
@@ -379,34 +420,62 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
               className="flex w-full items-center justify-between text-sm text-muted-foreground"
             >
               <span>
-                {ownerLabel} · {dateLabel}
+                {kind === 'expense' ? `${whoBearsLabel} · ` : ''}
+                {dateLabel}
               </span>
               <span className="underline underline-offset-2">Edit</span>
             </button>
           ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Owner</Label>
-                <OwnerSelect value={ownerId} onChange={setOwnerId} />
-                {debtPreview && <p className="text-xs text-muted-foreground">{debtPreview}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="txn-date">Date</Label>
-                <Input id="txn-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <div className="space-y-2">
+              {kind === 'expense' && (
+                <WhoBearsField amount={amountField.value} members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} />
+              )}
+              <div className="flex items-center gap-1.5">
+                <div className="flex-1 space-y-1.5">
+                  <Label htmlFor="txn-date">Date</Label>
+                  <DateField id="txn-date" value={date} onChange={setDate} />
+                </div>
+                {kind !== 'transfer' && !transaction && (
+                  <div className="relative shrink-0 self-end">
+                    <Button
+                      type="button"
+                      variant={repInstOpen ? 'secondary' : 'outline'}
+                      size="icon"
+                      onClick={() => setRepInstOpen((o) => !o)}
+                      aria-label="Repeat or instalment"
+                    >
+                      <CalendarSync className="size-4" />
+                    </Button>
+                    {repInstOpen && (
+                      <div className="absolute right-0 bottom-full z-10 mb-1.5 w-40 space-y-1 rounded-xl border bg-popover p-1.5 shadow-md">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRepInstOpen(false)
+                            setCreating('recurring')
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors active:bg-accent"
+                        >
+                          <Repeat className="size-4 text-muted-foreground" />
+                          Repeat
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRepInstOpen(false)
+                            setCreating('installment')
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors active:bg-accent"
+                        >
+                          <CalendarSync className="size-4 text-muted-foreground" />
+                          Instalment
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
-          )}
-
-          {(isSplit || isBorrow) && (
-            <label className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm">
-              <span>
-                Not a debt
-                <span className="block text-xs text-muted-foreground">
-                  Won't show up as owed on Overview, even though it isn't on your own card/account.
-                </span>
-              </span>
-              <Switch checked={debtExempt} onCheckedChange={setDebtExempt} />
-            </label>
           )}
 
           {/* Always open, but no longer required to be the last field: both
@@ -452,5 +521,27 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
         </DrawerFooter>
       </DrawerContent>
     </Drawer>
+
+    {creating === 'recurring' && (
+      <RecurringRuleSheet
+        rule={null}
+        prefill={buildPrefill()}
+        onClose={() => {
+          setCreating(null)
+          onOpenChange(false)
+        }}
+      />
+    )}
+    {creating === 'installment' && (
+      <InstallmentSheet
+        installment={null}
+        prefill={buildPrefill()}
+        onClose={() => {
+          setCreating(null)
+          onOpenChange(false)
+        }}
+      />
+    )}
+    </>
   )
 }

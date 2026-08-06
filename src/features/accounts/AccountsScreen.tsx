@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Pencil, Plus } from 'lucide-react'
 import { toast } from 'sonner'
+import { DateField } from '@/components/DateField'
 import { SwipeableRow } from '@/components/SwipeableRow'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,8 +21,135 @@ import {
   type InstrumentKind,
 } from '@/lib/instruments'
 import { formatBaht } from '@/lib/format'
+import { dayMonthLabel } from '@/lib/month'
+import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
+import { SettleUpSheet } from '@/features/home/SettleUpSheet'
 import { CardCycleDialog } from './CardCycleDialog'
+
+// D-0004: debts and their repayment history live here, not on Records —
+// what one person owes another is a current-state figure like an account
+// balance, not something that happened in a particular month.
+function BetweenUsSection() {
+  const { householdId, members } = useHousehold()
+  const { data: unsettled } = useUnsettledShares(householdId)
+  const { data: settlements } = useSettlements(householdId)
+  const undoRepayment = useUndoRepayment(householdId)
+  const [settling, setSettling] = useState<{ memberA: string; memberB: string } | null>(null)
+
+  const settlementRows = useMemo(() => {
+    const pairs = new Map<
+      string,
+      { memberA: string; memberB: string; owedByA: number; owedByB: number; count: number }
+    >()
+    for (const share of unsettled ?? []) {
+      const [memberA, memberB] = [share.owes_member_id, share.owed_member_id].sort()
+      const key = `${memberA}|${memberB}`
+      const entry = pairs.get(key) ?? { memberA, memberB, owedByA: 0, owedByB: 0, count: 0 }
+      if (share.owes_member_id === memberA) entry.owedByA += share.amount
+      else entry.owedByB += share.amount
+      entry.count += 1
+      pairs.set(key, entry)
+    }
+    return [...pairs.values()].map((entry) => {
+      const net = entry.owedByA - entry.owedByB
+      return {
+        ...entry,
+        owesId: net >= 0 ? entry.memberA : entry.memberB,
+        owedId: net >= 0 ? entry.memberB : entry.memberA,
+        amount: Math.abs(net),
+      }
+    })
+  }, [unsettled])
+  const nameOf = (memberId: string) => members.find((m) => m.id === memberId)?.display_name ?? 'Someone'
+  const recentSettlements = (settlements ?? []).slice(0, 5)
+
+  if (settlementRows.length === 0 && recentSettlements.length === 0) return null
+
+  return (
+    <>
+      <section className="space-y-2">
+        <h2 className="text-sm font-medium text-muted-foreground">Between us</h2>
+        {settlementRows.length > 0 && (
+          <div className="space-y-2">
+            {settlementRows.map((row) => (
+              <div
+                key={`${row.memberA}-${row.memberB}`}
+                className="flex items-center justify-between gap-3 rounded-2xl border bg-amber-50 px-4 py-3 text-sm dark:bg-amber-950/30"
+              >
+                <span className="min-w-0">
+                  {row.amount > 0 ? (
+                    <span className="block">
+                      <span className="font-medium">{nameOf(row.owesId)}</span> owes{' '}
+                      <span className="font-medium">{nameOf(row.owedId)}</span>{' '}
+                      <span className="font-semibold text-amber-700 dark:text-amber-400">{formatBaht(row.amount)}</span>
+                    </span>
+                  ) : (
+                    <span className="block font-medium">
+                      {nameOf(row.memberA)} and {nameOf(row.memberB)} are even
+                    </span>
+                  )}
+                  <span className="block text-xs text-muted-foreground">
+                    {row.count} item{row.count === 1 ? '' : 's'}
+                    {row.owedByA > 0 && row.owedByB > 0
+                      ? ` · net of ${nameOf(row.memberA)} ${formatBaht(row.owedByA)} / ${nameOf(row.memberB)} ${formatBaht(row.owedByB)}`
+                      : ''}
+                  </span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => setSettling({ memberA: row.memberA, memberB: row.memberB })}
+                >
+                  Settle up
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {recentSettlements.length > 0 && (
+          <div className="divide-y rounded-2xl border bg-card">
+            {recentSettlements.map((s) => (
+              <div key={s.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">
+                    {nameOf(s.from_member_id)} → {nameOf(s.to_member_id)}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {dayMonthLabel(s.settled_on)} · {s.share_count} item{s.share_count === 1 ? '' : 's'}
+                    {s.gross_amount !== s.amount ? ` · cleared ${formatBaht(s.gross_amount)}` : ''}
+                    {s.net_cleared !== s.amount ? ` · doesn't match linked debts (${formatBaht(s.net_cleared)})` : ''}
+                    {s.note ? ` · ${s.note}` : ''}
+                  </span>
+                </span>
+                <span className="shrink-0 font-medium">{formatBaht(s.amount)}</span>
+                <button
+                  type="button"
+                  onClick={() => undoRepayment.mutate(s.id)}
+                  disabled={undoRepayment.isPending}
+                  className="shrink-0 text-xs text-muted-foreground underline underline-offset-2"
+                >
+                  Undo
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {settling && (
+        <SettleUpSheet
+          open
+          onOpenChange={(open) => !open && setSettling(null)}
+          memberA={settling.memberA}
+          memberB={settling.memberB}
+        />
+      )}
+    </>
+  )
+}
 
 export function AccountsScreen() {
   const { householdId } = useHousehold()
@@ -95,6 +223,8 @@ export function AccountsScreen() {
           {cards?.length === 0 && <p className="text-sm text-muted-foreground">No cards yet.</p>}
         </ul>
       </section>
+
+      <BetweenUsSection />
 
       {editingAccount && (
         <AccountDialog
@@ -186,7 +316,7 @@ function AccountDialog({ account, onClose }: { account: Account | null; onClose:
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="account-date">Anchor date</Label>
-              <Input id="account-date" type="date" value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} />
+              <DateField id="account-date" value={anchorDate} onChange={setAnchorDate} />
             </div>
           </div>
           {account && (

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
-import { currentMonthKey } from '@/lib/month'
+import { currentMonthKey, toBuddhistYear } from '@/lib/month'
 import { cn } from '@/lib/utils'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -48,7 +48,7 @@ export function MonthYearPicker({ month, onSelect, onClose }: Props) {
             <Button variant="ghost" size="icon" onClick={() => setYear((y) => y - 1)} aria-label="Previous year">
               <ChevronLeft className="size-4" />
             </Button>
-            <span className="font-heading text-sm font-medium">{year}</span>
+            <span className="font-heading text-sm font-medium">{toBuddhistYear(year)}</span>
             <Button variant="ghost" size="icon" onClick={() => setYear((y) => y + 1)} aria-label="Next year">
               <ChevronRight className="size-4" />
             </Button>

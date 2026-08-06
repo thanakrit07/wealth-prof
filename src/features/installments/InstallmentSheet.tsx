@@ -7,11 +7,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { Switch } from '@/components/ui/switch'
 import { AmountField } from '@/components/AmountField'
+import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
 import { OwnerSelect } from '@/components/OwnerSelect'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
+import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useHousehold } from '@/lib/HouseholdContext'
 import {
   useCreateInstallment,
@@ -28,31 +30,34 @@ function today(): string {
 interface Props {
   installment: Installment | null
   onClose: () => void
+  // Set only when opened from Rep/Inst on the transaction form (D9) — what
+  // was already typed there, carried over rather than retyped.
+  prefill?: EntryPrefill
 }
 
-export function InstallmentSheet({ installment, onClose }: Props) {
+export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   const { householdId } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const create = useCreateInstallment(householdId)
   const update = useUpdateInstallment(householdId)
   const remove = useDeleteInstallment(householdId)
 
-  const [name, setName] = useState(installment?.name ?? '')
-  const [categoryId, setCategoryId] = useState<string | null>(installment?.category_id ?? null)
-  const [startDate, setStartDate] = useState(installment?.start_date ?? today())
+  const [name, setName] = useState(installment?.name ?? prefill?.name ?? '')
+  const [categoryId, setCategoryId] = useState<string | null>(installment?.category_id ?? prefill?.categoryId ?? null)
+  const [startDate, setStartDate] = useState(installment?.start_date ?? prefill?.date ?? today())
   const [totalPeriods, setTotalPeriods] = useState(String(installment?.total_periods ?? 12))
-  const monthlyAmount = useAmountEntry(installment ? String(installment.monthly_amount) : '')
+  const monthlyAmount = useAmountEntry(installment ? String(installment.monthly_amount) : prefill ? String(prefill.amount) : '')
   const finalAmount = useAmountEntry(installment?.final_amount != null ? String(installment.final_amount) : '')
   // Which of the two amount fields the sticky-footer Keypad is bound to
   // (DESIGN.md §7.2 D9) — only one keypad, shared between them.
   const [activeAmount, setActiveAmount] = useState<'monthly' | 'final' | null>(null)
   const [instrument, setInstrument] = useState<Instrument>({
-    accountId: installment?.account_id ?? null,
-    cardId: installment?.card_id ?? null,
+    accountId: installment?.account_id ?? prefill?.from.accountId ?? null,
+    cardId: installment?.card_id ?? prefill?.from.cardId ?? null,
   })
   const [interestRate, setInterestRate] = useState(String(installment?.annual_interest_rate ?? '0'))
   const [isCashAdvance, setIsCashAdvance] = useState(installment?.is_cash_advance ?? false)
-  const [ownerId, setOwnerId] = useState<string | null>(installment?.owner_id ?? null)
+  const [ownerId, setOwnerId] = useState<string | null>(installment?.owner_id ?? prefill?.ownerId ?? null)
   const [note, setNote] = useState(installment?.note ?? '')
 
   const flatExpenseCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
@@ -134,7 +139,7 @@ export function InstallmentSheet({ installment, onClose }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="inst-start">Start date</Label>
-              <Input id="inst-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <DateField id="inst-start" value={startDate} onChange={setStartDate} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="inst-periods">Total periods</Label>

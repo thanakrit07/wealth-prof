@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Instrument } from '@/components/InstrumentSelect'
 import { supabase } from './supabase'
+import type { TransactionKind } from './transactions'
 
 export interface TransactionShare {
   id: string
@@ -51,6 +52,85 @@ export interface Settlement {
   gross_amount: number
   net_cleared: number
   share_count: number
+}
+
+export interface ShareRow {
+  member_id: string
+  share_amount: number
+}
+
+// D13/ADR-0002: the application computes and writes a transaction's Split —
+// nothing in the database infers one from a null owner anymore (0024).
+// `custom` is the Who-bears panel's explicit breakdown (used verbatim, for
+// "Just you" — an empty array, the not-a-debt case — as much as for an
+// uneven split); omitting it falls back to the heuristic the interactive
+// form used before Who-bears existed, still used by the recurring and
+// installment materialisers:
+//   owner = null, 2+ members   → split evenly, one row per member
+//   owner = X, fronted by Y≠X  → X owes the full amount, one row (a borrow)
+//   otherwise                  → no rows; nothing is owed
+// Income is never split (ADR-0002): the earner owns it outright, no matter
+// what owner/fronting/custom combination is passed in.
+export function computeShareRows(params: {
+  kind: TransactionKind
+  ownerId: string | null
+  frontingMemberId: string | null
+  amount: number
+  memberIds: string[]
+  custom?: ShareRow[]
+}): ShareRow[] {
+  const { kind, ownerId, frontingMemberId, amount, memberIds, custom } = params
+  if (kind !== 'expense') return []
+  if (custom) return custom.filter((r) => r.share_amount > 0)
+
+  if (ownerId === null) {
+    if (memberIds.length < 2) return []
+    const totalCents = Math.round(amount * 100)
+    const base = Math.floor(totalCents / memberIds.length)
+    const remainder = totalCents - base * memberIds.length
+    // A remainder cent short of dividing evenly (e.g. ฿0.01 between two
+    // people) would otherwise produce a zero-amount row that fails the
+    // table's positive-amount check without changing the total.
+    return memberIds
+      .map((id, i) => ({ member_id: id, share_amount: (base + (i < remainder ? 1 : 0)) / 100 }))
+      .filter((r) => r.share_amount > 0)
+  }
+
+  if (frontingMemberId !== null && frontingMemberId !== ownerId) {
+    return [{ member_id: ownerId, share_amount: amount }]
+  }
+
+  return []
+}
+
+// Replaces a transaction's Split with a freshly computed one. A share that
+// is already settled blocks the delete (the guard trigger in 0024) rather
+// than silently rewriting a repayment's basis — that's left exactly as it
+// was, and the caller's other field changes (note, category, ...) still go
+// through since this runs after the transaction row itself is saved.
+export async function syncTransactionShares(params: {
+  householdId: string
+  transactionId: string
+  kind: TransactionKind
+  ownerId: string | null
+  frontingMemberId: string | null
+  amount: number
+  memberIds: string[]
+  custom?: ShareRow[]
+}): Promise<void> {
+  const rows = computeShareRows(params)
+
+  const { error: deleteError } = await supabase.from('transaction_shares').delete().eq('transaction_id', params.transactionId)
+  if (deleteError) {
+    if (deleteError.message.includes('settled up')) return
+    throw deleteError
+  }
+  if (rows.length === 0) return
+
+  const { error: insertError } = await supabase.from('transaction_shares').insert(
+    rows.map((r) => ({ household_id: params.householdId, transaction_id: params.transactionId, ...r })),
+  )
+  if (insertError) throw insertError
 }
 
 const SHARE_KEYS = ['transaction_shares', 'unsettled_shares', 'settlements'] as const
@@ -179,20 +259,6 @@ export function useUndoRepayment(householdId: string) {
         .from('transactions')
         .update({ deleted_at: new Date().toISOString() })
         .eq('id', transactionId)
-      if (error) throw error
-    },
-    onSuccess: () => invalidateShareQueries(queryClient, householdId),
-  })
-}
-
-// The escape hatch for a transaction that would otherwise read as a debt —
-// e.g. an imported row with no owner recorded, or a borrow the two of them
-// have separately decided not to track.
-export function useSetDebtExempt(householdId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async ({ transactionId, exempt }: { transactionId: string; exempt: boolean }) => {
-      const { error } = await supabase.from('transactions').update({ debt_exempt: exempt }).eq('id', transactionId)
       if (error) throw error
     },
     onSuccess: () => invalidateShareQueries(queryClient, householdId),

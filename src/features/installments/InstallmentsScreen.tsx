@@ -51,7 +51,7 @@ export function InstallmentsScreen() {
   const finished = (installments ?? []).filter((i) => i.status !== 'active')
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="font-heading text-sm font-medium text-muted-foreground">Installment plans</h2>
         <Button size="sm" variant="outline" onClick={() => setEditing('new')}>

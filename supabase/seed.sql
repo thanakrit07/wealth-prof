@@ -5,9 +5,10 @@
 -- the Overview UI can be tried against realistic data before touching real
 -- data. Login for both: password "password123".
 --
--- transaction_shares are NOT inserted directly here -- the trigger in 0022
--- (transactions_sync_shares) writes them itself the moment each transaction
--- below is inserted, exactly as it would for the real app.
+-- transaction_shares are inserted explicitly below, matching what
+-- src/lib/transactionShares.ts's computeShareRows would write for each
+-- transaction (0024 -- D13: the application computes and writes the
+-- breakdown; nothing in the database infers one from a null owner anymore).
 
 begin;
 
@@ -99,11 +100,26 @@ insert into transactions (id, household_id, date, kind, category_id, category_ki
 
 -- A borrow (debt_kind = 'borrow'): เอิร์ธ's own laptop bag, but his card had
 -- no room left so he paid with พลอย's card. owner_id (a1) differs from the
--- paying card's owner_id (a2) -- the trigger writes one full-amount share for
--- เอิร์ธ, same as it would for any transaction shaped like this.
+-- paying card's owner_id (a2), so the whole amount is เอิร์ธ's -- one
+-- full-amount share below, same as any transaction shaped like this.
 insert into transactions (id, household_id, date, kind, category_id, category_kind, note, amount, owner_id, from_card_id) values
   ('10000000-0000-0000-0000-000000000210', '10000000-0000-0000-0000-000000000000', '2026-07-18', 'expense',
    '10000000-0000-0000-0000-000000000106', 'expense', 'กระเป๋าโน้ตบุ๊ก (ยืมบัตรพลอยจ่าย)', 690, '10000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000c2');
+
+-- The breakdowns computeShareRows would write for the transactions above:
+-- 201-204 split evenly (owner_id null, 2 members, divides cleanly); 210 is
+-- the single-row borrow; 205-209 are personal (owner = paying instrument's
+-- owner) and get no rows at all.
+insert into transaction_shares (household_id, transaction_id, member_id, share_amount) values
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000201', '10000000-0000-0000-0000-0000000000a1', 620),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000201', '10000000-0000-0000-0000-0000000000a2', 620),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000202', '10000000-0000-0000-0000-0000000000a1', 430),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000202', '10000000-0000-0000-0000-0000000000a2', 430),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000203', '10000000-0000-0000-0000-0000000000a1', 295),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000203', '10000000-0000-0000-0000-0000000000a2', 295),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000204', '10000000-0000-0000-0000-0000000000a1', 240),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000204', '10000000-0000-0000-0000-0000000000a2', 240),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-000000000210', '10000000-0000-0000-0000-0000000000a1', 690);
 
 -- One repayment already happened: พลอย paid back her half of the restaurant
 -- bill by transferring into เอิร์ธ's account. It's a real transfer -- kind =
@@ -116,7 +132,7 @@ insert into transactions (id, household_id, date, kind, category_id, category_ki
    '10000000-0000-0000-0000-0000000000b2', '10000000-0000-0000-0000-0000000000b1', 'โอนคืนค่าอาหารเย็น');
 
 -- Point พลอย's share of the ฿860 dinner (transaction 202) at that transfer.
--- Everything else the trigger created above stays open.
+-- Everything else inserted above stays open.
 update transaction_shares
 set settled_by_transaction_id = '10000000-0000-0000-0000-000000000301'
 where transaction_id = '10000000-0000-0000-0000-000000000202'

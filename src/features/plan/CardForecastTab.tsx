@@ -8,7 +8,7 @@ import { cycleBill, cycleDueInMonth, periodDate } from '@/lib/finance/billingCyc
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { useInstallments, usePostedPeriods } from '@/lib/installments'
-import { currentMonthKey, dayMonthLabel, monthLabel, shiftMonth } from '@/lib/month'
+import { currentMonthKey, dayMonthLabel, monthLabel, shiftMonth, toBuddhistYear } from '@/lib/month'
 import { useRecurringRules } from '@/lib/recurring'
 import { useTransactions } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
@@ -128,7 +128,7 @@ export function CardForecastTab() {
           <SelectContent>
             <SelectItem value="recent">Recent</SelectItem>
             {years.map((y) => (
-              <SelectItem key={y} value={y}>{y}</SelectItem>
+              <SelectItem key={y} value={y}>{toBuddhistYear(Number(y))}</SelectItem>
             ))}
           </SelectContent>
         </Select>

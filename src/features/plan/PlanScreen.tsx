@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Plus, Repeat } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { InstallmentsScreen } from '@/features/installments/InstallmentsScreen'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { formatBaht } from '@/lib/format'
@@ -117,25 +116,22 @@ function RecurringTab() {
   )
 }
 
+// D-0004: no sub-tabs — everything already committed (card bills, plans,
+// recurring rules) sits on one scrollable screen, so a plan is one tap from
+// the FAB instead of two.
 export function PlanScreen() {
   return (
-    <div className="p-4">
-      <Tabs defaultValue="cards">
-        <TabsList className="mb-4 w-full">
-          <TabsTrigger value="cards" className="flex-1">Card bills</TabsTrigger>
-          <TabsTrigger value="recurring" className="flex-1">Recurring</TabsTrigger>
-          <TabsTrigger value="installments" className="flex-1">Installments</TabsTrigger>
-        </TabsList>
-        <TabsContent value="cards">
-          <CardForecastTab />
-        </TabsContent>
-        <TabsContent value="recurring">
-          <RecurringTab />
-        </TabsContent>
-        <TabsContent value="installments">
-          <InstallmentsScreen />
-        </TabsContent>
-      </Tabs>
+    <div className="space-y-6 p-4">
+      <section className="space-y-2">
+        <h2 className="font-heading text-sm font-medium text-muted-foreground">Card bills</h2>
+        <CardForecastTab />
+      </section>
+      <section>
+        <RecurringTab />
+      </section>
+      <section>
+        <InstallmentsScreen />
+      </section>
     </div>
   )
 }

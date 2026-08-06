@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { useAccounts } from '@/lib/accounts'
 import { useCategories } from '@/lib/categories'
@@ -248,7 +249,7 @@ export function SettleUpSheet({ open, onOpenChange, memberA, memberB }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="settle-date">Paid on</Label>
-              <Input id="settle-date" type="date" value={settledOn} onChange={(e) => setSettledOn(e.target.value)} />
+              <DateField id="settle-date" value={settledOn} onChange={setSettledOn} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="settle-note">Note (optional)</Label>

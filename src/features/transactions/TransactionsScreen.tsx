@@ -1,18 +1,19 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, Check, X } from 'lucide-react'
+import { ArrowRightLeft, Check, ChevronDown, ChevronRight, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { SwipeableRow } from '@/components/SwipeableRow'
 import { CategoryIcon } from '@/lib/categoryIcons'
-import { effectiveMainId, useCategories } from '@/lib/categories'
+import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
 import { useInstrumentNames } from '@/lib/instruments'
 import { useHousehold } from '@/lib/HouseholdContext'
-import { matchesPersonFilter, type PersonFilter } from '@/lib/filters'
+import { borneAmount, matchesPersonFilter, sharesByTransaction, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
 import { dayOfMonthLabel, monthRange, weekdayLabel } from '@/lib/month'
 import { supabase } from '@/lib/supabase'
 import { parsePeriodSourceKey } from '@/lib/installmentMaterialiser'
 import { useInstallmentPayments, useSetPeriodPaid } from '@/lib/installments'
+import { useTransactionShares } from '@/lib/transactionShares'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
 import { ReviewStrip } from './ReviewStrip'
@@ -25,23 +26,36 @@ function todayIso(): string {
 interface Props {
   month: string
   person: PersonFilter
+  search: string
   categoryId?: string | null
   onClearCategory?: () => void
 }
 
-export function TransactionsScreen({ month, person, categoryId, onClearCategory }: Props) {
+interface MainRow {
+  main: Category
+  total: number
+  subs: { category: Category; total: number }[]
+}
+
+export function TransactionsScreen({ month, person, search, categoryId, onClearCategory }: Props) {
   const { householdId, members } = useHousehold()
   const range = useMemo(() => monthRange(month), [month])
   const { data: transactions } = useTransactions(householdId, range)
   const { data: categories } = useCategories(householdId)
+  const { data: shares } = useTransactionShares(householdId)
   // Includes deleted accounts/cards, so a past transaction keeps naming
   // where the money actually moved (see useInstrumentNames).
   const { data: instrumentName } = useInstrumentNames(householdId)
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [categoriesOpen, setCategoriesOpen] = useState(false)
+  const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
   const remove = useDeleteTransaction(householdId)
   const { data: payments } = useInstallmentPayments(householdId)
   const setPeriodPaid = useSetPeriodPaid(householdId)
   const queryClient = useQueryClient()
+
+  const sharesByTxn = useMemo(() => sharesByTransaction(shares), [shares])
 
   // Settled installment periods, keyed "<installmentId>:<periodNo>".
   const paidKeys = useMemo(
@@ -49,20 +63,11 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
     [payments],
   )
 
-  /**
-   * The tick box only exists on installment periods charged to a **card**:
-   * that is the one case where posting and settling genuinely differ — the
-   * charge is on the statement the moment the period lands, but the money
-   * only leaves when the statement gets paid. Cash and bank rows have no
-   * such gap, so a checkbox there would be a question with no answer.
-   */
   function installmentPeriodOf(t: Transaction) {
     if (t.source !== 'installment' || !t.from_card_id) return null
     return parsePeriodSourceKey(t.source_key)
   }
 
-  // Soft delete with undo, same contract as saving from the sheet: the row
-  // only sets deleted_at, so restoring is a matching update.
   async function handleDelete(t: Transaction) {
     await remove.mutateAsync(t.id)
     toast.success('Transaction deleted', {
@@ -79,17 +84,87 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
   const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
 
-  // A main category's filter also matches transactions filed under its subs
-  // (D10 rollup) — the Overview breakdown groups by effective main, so
-  // drilling in from there must not drop the sub rows that made up the total.
+  // Unconfirmed (generated, unreviewed) rows are excluded from every total (§6.6).
+  const confirmed = useMemo(() => (transactions ?? []).filter((t) => t.confirmed), [transactions])
+
   const matchesCategory = (t: Transaction) => {
     if (!categoryId) return true
     if (t.category_id === categoryId) return true
     const category = t.category_id ? categoryById.get(t.category_id) : null
     return category != null && effectiveMainId(category) === categoryId
   }
-  const filtered = (transactions ?? []).filter((t) => matchesPersonFilter(t.owner_id, person) && matchesCategory(t))
-  const filterCategory = categoryId ? categoryById.get(categoryId) : null
+  const matchesSearch = (t: Transaction) => {
+    if (!search.trim()) return true
+    const q = search.trim().toLowerCase()
+    const category = t.category_id ? categoryById.get(t.category_id) : null
+    const haystack = [t.note, t.description, category?.name, instrumentName?.[`account:${t.from_account_id}`], instrumentName?.[`card:${t.from_card_id}`]]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return haystack.includes(q)
+  }
+
+  const filtered = confirmed.filter(
+    (t) => matchesPersonFilter(t, sharesByTxn, person) && matchesCategory(t) && matchesSearch(t),
+  )
+  // D14: the headline is what this person Borne, not the face value of what
+  // they're merely listed on — full amounts here would double-count a
+  // shared row across both people's totals and break "A + B = All".
+  const borneOf = (t: Transaction) => (person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person))
+  const income = filtered.filter((t) => t.kind === 'income').reduce((sum, t) => sum + borneOf(t), 0)
+  const expense = filtered.filter((t) => t.kind === 'expense').reduce((sum, t) => sum + borneOf(t), 0)
+
+  // Per-person Borne breakdown for the month, regardless of the active chip
+  // — useful to see "how much did each of us spend" no matter who's
+  // currently selected.
+  const personRows = useMemo(() => {
+    return members
+      .map((m) => {
+        const own = confirmed.filter((t) => matchesPersonFilter(t, sharesByTxn, m.id))
+        const income = own.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0)
+        const expense = own.filter((t) => t.kind === 'expense').reduce((s, t) => s + borneAmount(t, sharesByTxn, m.id), 0)
+        return { key: m.id, label: m.display_name, color: m.color, income, expense }
+      })
+      .filter((row) => row.income > 0 || row.expense > 0)
+  }, [confirmed, members, sharesByTxn])
+
+  // Expense by category, rolled up to effective mains (D10) and to Borne
+  // amounts under the active person filter.
+  const categoryRows = useMemo<MainRow[]>(() => {
+    const byId = new Map((categories ?? []).map((c) => [c.id, c]))
+    const mainTotals = new Map<string, number>()
+    const subTotals = new Map<string, Map<string, number>>()
+
+    for (const t of filtered) {
+      if (t.kind !== 'expense' || !t.category_id) continue
+      const category = byId.get(t.category_id)
+      if (!category) continue
+      const amount = person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person)
+      const mainId = effectiveMainId(category)
+      mainTotals.set(mainId, (mainTotals.get(mainId) ?? 0) + amount)
+      if (category.parent_id) {
+        const subs = subTotals.get(mainId) ?? new Map<string, number>()
+        subs.set(category.id, (subs.get(category.id) ?? 0) + amount)
+        subTotals.set(mainId, subs)
+      }
+    }
+
+    return [...mainTotals.entries()]
+      .map(([id, total]) => {
+        const main = byId.get(id)
+        if (!main) return null
+        const subs = [...(subTotals.get(id) ?? new Map<string, number>()).entries()]
+          .map(([subId, subTotal]) => ({ category: byId.get(subId), total: subTotal }))
+          .filter((row): row is { category: Category; total: number } => row.category != null)
+          .sort((a, b) => b.total - a.total)
+        return { main, total, subs }
+      })
+      .filter((row): row is MainRow => row != null)
+      .sort((a, b) => b.total - a.total)
+  }, [filtered, categories, person, sharesByTxn])
+  const maxCategoryTotal = categoryRows[0]?.total ?? 0
+  const categoryTotal = categoryRows.reduce((sum, row) => sum + row.total, 0)
+
   const groups = useMemo(() => {
     const map = new Map<string, Transaction[]>()
     for (const t of filtered) {
@@ -108,13 +183,108 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
     return ''
   }
 
+  const filterCategory = categoryId ? categoryById.get(categoryId) : null
+
   return (
-    <div className="p-4">
+    <div className="space-y-3 p-4">
+      {/* One line (DESIGN §7.1 v3.5): the planning figures are the reason to
+          open Records, but the daily habit is "jot → check the list", so the
+          summary can't push the first transaction off the screen. */}
+      <button
+        type="button"
+        onClick={() => setSummaryOpen((open) => !open)}
+        className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
+      >
+        <span className="flex-1 truncate">
+          In <span className="text-emerald-600 dark:text-emerald-400">{formatBaht(income)}</span> · Out{' '}
+          {formatBaht(expense)}
+        </span>
+        <span className={cn('font-semibold', income - expense >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+          {income - expense >= 0 ? '+' : ''}
+          {formatBaht(income - expense)}
+        </span>
+        <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', summaryOpen && 'rotate-180')} />
+      </button>
+
+      {summaryOpen && personRows.length > 0 && (
+        <div className="divide-y rounded-2xl border bg-card">
+          {personRows.map((row) => (
+            <div key={row.key} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
+              <span className="flex-1 truncate">{row.label}</span>
+              <span className="text-emerald-600 dark:text-emerald-400">+{formatBaht(row.income)}</span>
+              <span className="text-muted-foreground">-{formatBaht(row.expense)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {categoryRows.length > 0 && (
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            onClick={() => setCategoriesOpen((open) => !open)}
+            className="flex w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-left text-sm transition-colors active:bg-accent/60"
+          >
+            <span className="flex-1 text-muted-foreground">Categories</span>
+            <span>{formatBaht(categoryTotal)}</span>
+            <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', categoriesOpen && 'rotate-180')} />
+          </button>
+
+          {categoriesOpen && (
+            <ul className="space-y-1.5">
+              {categoryRows.map(({ main, total, subs }) => {
+                const isExpanded = expandedMainId === main.id
+                return (
+                  <li key={main.id} className="space-y-1">
+                    <div className="space-y-1.5 rounded-xl border bg-card px-3 py-2">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <CategoryIcon icon={main.icon} color={main.color} className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="flex-1 truncate">{main.name}</span>
+                          <span>{formatBaht(total)}</span>
+                        </span>
+                        {subs.length > 0 && (
+                          <button
+                            onClick={() => setExpandedMainId(isExpanded ? null : main.id)}
+                            className="shrink-0 text-muted-foreground"
+                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${main.name}`}
+                          >
+                            <ChevronRight className={cn('size-4 transition-transform', isExpanded && 'rotate-90')} />
+                          </button>
+                        )}
+                      </div>
+                      <span className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <span
+                          className="block h-full rounded-full bg-primary/70"
+                          style={{ width: `${Math.max(4, (total / maxCategoryTotal) * 100)}%` }}
+                        />
+                      </span>
+                    </div>
+                    {isExpanded && subs.length > 0 && (
+                      <ul className="ml-4 space-y-1 border-l pl-3">
+                        {subs.map(({ category, total: subTotal }) => (
+                          <li key={category.id} className="flex items-center gap-2 px-2 py-1.5 text-left text-sm">
+                            <CategoryIcon icon={category.icon} color={category.color} className="size-3.5 shrink-0 text-muted-foreground" />
+                            <span className="flex-1 truncate">{category.name}</span>
+                            <span className="text-muted-foreground">{formatBaht(subTotal)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+
       <ReviewStrip onEdit={setEditing} />
       {filterCategory && (
         <button
           onClick={onClearCategory}
-          className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
         >
           <CategoryIcon icon={filterCategory.icon} color={filterCategory.color} className="size-3.5" />
           {filterCategory.name}
@@ -127,8 +297,8 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
           dividers replace the per-row borders and gaps. */}
       <div className="overflow-hidden rounded-xl border bg-card">
         {groups.map(([date, items], groupIndex) => {
-          const dayIncome = items.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0)
-          const dayExpense = items.filter((t) => t.kind === 'expense').reduce((s, t) => s + t.amount, 0)
+          const dayIncome = items.filter((t) => t.kind === 'income').reduce((s, t) => s + borneOf(t), 0)
+          const dayExpense = items.filter((t) => t.kind === 'expense').reduce((s, t) => s + borneOf(t), 0)
           return (
             <div key={date} className={groupIndex > 0 ? 'border-t' : undefined}>
               <div className="flex items-center gap-2 bg-muted/50 px-3 py-1">
@@ -156,6 +326,11 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
                   const details = [category?.name === title ? null : category?.name, instrumentLabel(t, 'from'), owner?.display_name]
                     .filter(Boolean)
                     .join(' · ')
+                  // Under a specific person's filter, a shared row's full
+                  // amount stays the headline (the coffee cost what it cost)
+                  // and their own portion shows underneath — showing only the
+                  // portion would misstate what the thing cost.
+                  const mine = person !== 'all' ? borneAmount(t, sharesByTxn, person) : null
                   const period = installmentPeriodOf(t)
                   const periodKey = period ? `${period.installmentId}:${period.periodNo}` : null
                   const periodPaid = periodKey != null && paidKeys.has(periodKey)
@@ -181,7 +356,12 @@ export function TransactionsScreen({ month, person, categoryId, onClearCategory 
                                   </span>
                                 )}
                               </span>
-                              {details && <span className="block truncate text-[11px] text-muted-foreground">{details}</span>}
+                              {(details || (mine != null && mine > 0 && mine < t.amount)) && (
+                                <span className="block truncate text-[11px] text-muted-foreground">
+                                  {details}
+                                  {mine != null && mine > 0 && mine < t.amount && (details ? ` · yours ${formatBaht(mine)}` : `yours ${formatBaht(mine)}`)}
+                                </span>
+                              )}
                             </span>
                             <span
                               className={cn(

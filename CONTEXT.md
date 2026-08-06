@@ -1,0 +1,124 @@
+# Wealth Prof
+
+A shared personal-finance app for one household of two people. It answers three
+questions: where the money went, how much cash to set aside before each credit
+card's bill is due, and who owes whom.
+
+## Language
+
+### People and money holders
+
+**Household**:
+The sharing unit. Everything in the app belongs to exactly one.
+_Avoid_: family, group, team
+
+**Member**:
+A person in the household. Members are the only people money can be attributed
+to or owed between.
+_Avoid_: user, person, account holder
+
+**Instrument**:
+Something money sits in or is charged to — a bank account, cash, an e-wallet,
+or a credit card. Every Transaction names the Instrument the money came from.
+_Avoid_: payment method, source, wallet
+
+**Owner**:
+The Member an Instrument or a Transaction belongs to.
+_Avoid_: holder, assignee
+
+### The ledger
+
+**Transaction**:
+A single movement of money that has been recorded — money in, money out, or
+money moved between two of the household's own Instruments.
+_Avoid_: entry, record, item
+
+**Kind**:
+What a Transaction did to the household's total: income, expense, or transfer.
+A transfer changes neither total; it only moves value between Instruments.
+_Avoid_: type, direction
+
+**Origin**:
+What caused a Transaction to exist: entered by hand, generated from a Recurring
+Rule, generated from an Installment Plan, or brought in by the sheet import.
+Independent of Kind — a salary is both recurring and income.
+_Avoid_: source (that word already means the paying Instrument), reason
+
+### Commitments
+
+**Installment Plan**:
+An agreement to pay a fixed sum in a known number of Periods. The debt exists in
+full the moment the plan starts, so its Periods are certain and are recorded as
+Transactions immediately, including the ones still in the future.
+_Avoid_: loan, plan, financing
+
+**Period**:
+One numbered payment of an Installment Plan, e.g. "งวดที่ 3/10".
+_Avoid_: instalment, month, payment
+
+**Recurring Rule**:
+A repeating expectation with no committed end — a salary, a subscription, a
+utility bill. Unlike an Installment Plan it can be stopped at any time and its
+amount often varies, so future Occurrences are never recorded as Transactions.
+_Avoid_: schedule, subscription, standing order
+
+**Occurrence**:
+One scheduled date produced by a Recurring Rule.
+_Avoid_: instance, event, repeat
+
+**Posted**:
+Written into the ledger as a real Transaction. Installment Periods are posted
+ahead of time; Recurring Occurrences are posted only once their date arrives.
+_Avoid_: created, materialised, generated
+
+**Projected**:
+Calculated for display only and never stored — how future Recurring Occurrences
+reach screens that look ahead.
+_Avoid_: forecast, predicted, virtual
+
+### Sharing and debt
+
+**Split**:
+How a Transaction's amount is divided between the Members who bear it, which is
+a separate question from which Member's Instrument paid for it. Portions need
+not be equal. An Installment Plan carries the Split its Periods inherit, and a
+Period may depart from it.
+_Avoid_: share (ambiguous with a single person's portion), allocation
+
+**Borne**:
+The portion of a Transaction a Member carries, which is what "how much did I
+spend" means throughout the app. A Member who paid for something but bears none
+of it has spent nothing by this measure — the money leaving their Instrument is
+a separate question, answered by the Instrument's own screens.
+_Avoid_: attributed, charged, assigned
+
+**Debt**:
+An amount one Member bears on a Transaction that another Member's Instrument
+paid for. It covers both halves of a shared cost and a personal cost put on
+someone else's card.
+_Avoid_: loan, IOU, balance
+
+**Cleared**:
+Said of a Transaction that has been concluded — its money has left the
+Instrument, or the Debt on it has been repaid, or both. Bulk actions on an
+Installment Plan leave Cleared Periods untouched; only what is still open or
+still in the future is theirs to remove.
+_Avoid_: closed, done, paid (paid is only half of it)
+
+**Settlement**:
+A repayment that clears one or more Debts. It is an ordinary transfer between
+the two Members' Instruments, so the repayment appears in the ledger like any
+other movement of money.
+_Avoid_: payback, reconciliation, clearing
+
+### Credit cards
+
+**Billing Cycle**:
+The window between a card's statement days. Card money moves per cycle, not per
+calendar month, so every card figure in the app is computed per cycle.
+_Avoid_: statement period, month
+
+**Cycle Bill**:
+What a card's Billing Cycle actually demands: its charges in that cycle,
+adjusted to agree with the real statement.
+_Avoid_: statement balance, amount due

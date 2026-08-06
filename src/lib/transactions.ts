@@ -22,7 +22,6 @@ export interface Transaction {
   confirmed: boolean
   source: string
   source_key: string | null
-  debt_exempt: boolean
 }
 
 export interface TransactionInput {
@@ -38,7 +37,6 @@ export interface TransactionInput {
   toAccountId: string | null
   toCardId: string | null
   note: string | null
-  debtExempt: boolean
 }
 
 function toRow(householdId: string, input: TransactionInput) {
@@ -56,7 +54,6 @@ function toRow(householdId: string, input: TransactionInput) {
     to_account_id: input.toAccountId,
     to_card_id: input.toCardId,
     note: input.note,
-    debt_exempt: input.debtExempt,
   }
 }
 
@@ -67,7 +64,7 @@ export function useTransactions(householdId: string, range: { start: string; end
       const { data, error } = await supabase
         .from('v_transactions')
         .select(
-          'id, household_id, date, kind, category_id, category_kind, description, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, confirmed, source, source_key, debt_exempt',
+          'id, household_id, date, kind, category_id, category_kind, description, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, confirmed, source, source_key',
         )
         .eq('household_id', householdId)
         .gte('date', range.start)
@@ -120,7 +117,7 @@ export function useUnconfirmedTransactions(householdId: string) {
       const { data, error } = await supabase
         .from('v_transactions')
         .select(
-          'id, household_id, date, kind, category_id, category_kind, description, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, confirmed, source, source_key, debt_exempt',
+          'id, household_id, date, kind, category_id, category_kind, description, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, confirmed, source, source_key',
         )
         .eq('household_id', householdId)
         .eq('confirmed', false)
