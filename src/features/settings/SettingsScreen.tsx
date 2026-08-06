@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { FullScreenPage } from '@/components/FullScreenPage'
 import { CategoriesScreen } from '@/features/categories/CategoriesScreen'
 import { ChangePasswordDialog } from '@/features/settings/ChangePasswordDialog'
 import { InviteSection } from '@/features/settings/InviteSection'
@@ -100,14 +100,11 @@ export function SettingsScreen() {
         Signing out also clears the financial data cached on this device.
       </p>
 
-      <Dialog open={categoriesOpen} onOpenChange={setCategoriesOpen}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Categories</DialogTitle>
-          </DialogHeader>
+      {categoriesOpen && (
+        <FullScreenPage title="Categories" onClose={() => setCategoriesOpen(false)}>
           <CategoriesScreen />
-        </DialogContent>
-      </Dialog>
+        </FullScreenPage>
+      )}
 
       <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
     </div>

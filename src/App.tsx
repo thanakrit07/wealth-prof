@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft } from 'lucide-react'
 import { AppShell } from '@/components/layout/AppShell'
 import type { Tab } from '@/components/layout/AppShell'
-import { Button } from '@/components/ui/button'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { FullScreenPage } from '@/components/FullScreenPage'
 import { ErrorScreen } from '@/components/ErrorScreen'
 import { AuthScreen } from './components/AuthScreen'
 import { HouseholdSetup } from './components/HouseholdSetup'
@@ -134,17 +133,9 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
       </AppShell>
       <TransactionSheet open={quickAddOpen} onOpenChange={setQuickAddOpen} />
       {settingsOpen && (
-        <div className="fixed inset-0 z-30 flex flex-col bg-background">
-          <header className="sticky top-0 flex items-center gap-2 border-b bg-background px-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2">
-            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(false)} aria-label="Back">
-              <ChevronLeft className="size-5" />
-            </Button>
-            <h1 className="font-heading text-sm font-medium">Settings</h1>
-          </header>
-          <div className="flex-1 overflow-y-auto">
-            <SettingsScreen />
-          </div>
-        </div>
+        <FullScreenPage title="Settings" onClose={() => setSettingsOpen(false)}>
+          <SettingsScreen />
+        </FullScreenPage>
       )}
     </HouseholdProvider>
   )
