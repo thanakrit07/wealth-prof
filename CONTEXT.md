@@ -23,8 +23,19 @@ or a credit card. Every Transaction names the Instrument the money came from.
 _Avoid_: payment method, source, wallet
 
 **Owner**:
-The Member an Instrument or a Transaction belongs to.
+The Member an Instrument or a Transaction belongs to. On an Instrument the
+question it settles is who fronted the money, which is what decides whether a
+Debt arises; an Instrument with no Owner is a Common Pot.
 _Avoid_: holder, assignee
+
+**Common Pot**:
+An Instrument both Members put money into and pay shared costs out of — a joint
+account, a joint card. It has no Owner and no per-person breakdown: money moved
+into it stops being that Member's individually, and spending out of it creates
+no Debt, because nothing was fronted by one person for the other. How much each
+has contributed is read back from the Transfers that funded it, never stored as
+a balance or a proportion.
+_Avoid_: shared account (ambiguous with a Split), joint, kitty
 
 ### The ledger
 
