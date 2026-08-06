@@ -10,10 +10,11 @@ import { AmountField } from '@/components/AmountField'
 import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
-import { OwnerSelect } from '@/components/OwnerSelect'
+import { SimpleWhoBears } from '@/components/SimpleWhoBears'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
+import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import {
   useCreateInstallment,
@@ -22,10 +23,25 @@ import {
   type Installment,
   type InstallmentInput,
 } from '@/lib/installments'
+import { cn } from '@/lib/utils'
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+// The whole point of totalling is not doing this division by hand. The last
+// period absorbs whatever the split doesn't divide evenly — same rounding
+// rule as an even Split (computeShareRows) — so every period's amount sums
+// back to exactly the total, in satang, not just in the common case.
+function splitTotal(total: number, periods: number): { monthly: number; final: number } {
+  if (periods <= 0) return { monthly: 0, final: 0 }
+  const totalCents = Math.round(total * 100)
+  const monthlyCents = Math.floor(totalCents / periods)
+  const finalCents = totalCents - monthlyCents * (periods - 1)
+  return { monthly: monthlyCents / 100, final: finalCents / 100 }
+}
+
+type AmountMode = 'total' | 'per-period'
 
 interface Props {
   installment: Installment | null
@@ -36,7 +52,7 @@ interface Props {
 }
 
 export function InstallmentSheet({ installment, onClose, prefill }: Props) {
-  const { householdId } = useHousehold()
+  const { householdId, self, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const create = useCreateInstallment(householdId)
   const update = useUpdateInstallment(householdId)
@@ -46,18 +62,31 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   const [categoryId, setCategoryId] = useState<string | null>(installment?.category_id ?? prefill?.categoryId ?? null)
   const [startDate, setStartDate] = useState(installment?.start_date ?? prefill?.date ?? today())
   const [totalPeriods, setTotalPeriods] = useState(String(installment?.total_periods ?? 12))
-  const monthlyAmount = useAmountEntry(installment ? String(installment.monthly_amount) : prefill ? String(prefill.amount) : '')
-  const finalAmount = useAmountEntry(installment?.final_amount != null ? String(installment.final_amount) : '')
-  // Which of the two amount fields the sticky-footer Keypad is bound to
-  // (DESIGN.md §7.2 D9) — only one keypad, shared between them.
-  const [activeAmount, setActiveAmount] = useState<'monthly' | 'final' | null>(null)
+  // Total is the primary way in (whatever the price tag said); typing a
+  // known per-period figure instead — the bank's own wording — works too,
+  // and whichever one wasn't typed is only ever a computed preview, never
+  // stored separately (§7.2, "enter it either way round").
+  const [amountMode, setAmountMode] = useState<AmountMode>('total')
+  const periodsNum = Number(totalPeriods) || 0
+  const initialAmount = installment
+    ? installment.monthly_amount * installment.total_periods -
+      installment.monthly_amount +
+      (installment.final_amount ?? installment.monthly_amount)
+    : prefill
+      ? prefill.amount
+      : 0
+  const amount = useAmountEntry(installment || prefill ? String(initialAmount) : '')
+  const [activeAmount, setActiveAmount] = useState(false)
+  const { monthly: previewMonthly, final: previewFinal } =
+    amountMode === 'total' ? splitTotal(amount.value, periodsNum) : { monthly: amount.value, final: amount.value }
+  const previewTotal = amountMode === 'total' ? amount.value : amount.value * periodsNum
   const [instrument, setInstrument] = useState<Instrument>({
     accountId: installment?.account_id ?? prefill?.from.accountId ?? null,
     cardId: installment?.card_id ?? prefill?.from.cardId ?? null,
   })
   const [interestRate, setInterestRate] = useState(String(installment?.annual_interest_rate ?? '0'))
   const [isCashAdvance, setIsCashAdvance] = useState(installment?.is_cash_advance ?? false)
-  const [ownerId, setOwnerId] = useState<string | null>(installment?.owner_id ?? prefill?.ownerId ?? null)
+  const [ownerId, setOwnerId] = useState<string | null>(installment ? installment.owner_id : (prefill?.ownerId ?? self.id))
   const [note, setNote] = useState(installment?.note ?? '')
 
   const flatExpenseCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
@@ -71,20 +100,20 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   // transactions' category_iff_not_transfer check rejects an expense with no
   // category — so a plan saved without one silently never posts.
   const canSave =
-    name.trim().length > 0 &&
-    Number(totalPeriods) > 0 &&
-    monthlyAmount.value > 0 &&
-    categoryId != null &&
-    Boolean(instrument.accountId || instrument.cardId)
+    name.trim().length > 0 && periodsNum > 0 && amount.value > 0 && categoryId != null && Boolean(instrument.accountId || instrument.cardId)
 
   async function handleSave() {
+    // The final period only ever differs from the rest by however the total
+    // failed to divide evenly (splitTotal) — never a separately typed figure
+    // (§7.2 v3.5: one amount field, entered either way round). null when the
+    // two happen to match, matching the column's existing "null = same" rule.
     const input: InstallmentInput = {
       name: name.trim(),
       category_id: categoryId,
       start_date: startDate,
-      total_periods: Number(totalPeriods),
-      monthly_amount: monthlyAmount.value,
-      final_amount: finalAmount.expr ? finalAmount.value : null,
+      total_periods: periodsNum,
+      monthly_amount: previewMonthly,
+      final_amount: previewFinal !== previewMonthly ? previewFinal : null,
       card_id: instrument.cardId,
       account_id: instrument.accountId,
       annual_interest_rate: Number(interestRate),
@@ -147,19 +176,43 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>{amountMode === 'total' ? 'Total amount' : 'Amount per period'}</Label>
+              <div className="flex gap-1 rounded-lg border p-0.5 text-xs">
+                {(['total', 'per-period'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setAmountMode(m)}
+                    className={cn(
+                      'rounded-md px-2 py-1 transition-colors',
+                      amountMode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    {m === 'total' ? 'Total' : 'Per period'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <AmountField
-              label="Amount per period"
-              expr={monthlyAmount.expr}
-              active={activeAmount === 'monthly'}
-              onActivate={() => setActiveAmount('monthly')}
+              expr={amount.expr}
+              active={activeAmount}
+              onActivate={() => setActiveAmount(true)}
+              size="lg"
             />
-            <AmountField
-              label="Final period (optional)"
-              expr={finalAmount.expr}
-              active={activeAmount === 'final'}
-              onActivate={() => setActiveAmount('final')}
-            />
+            {/* Whichever half wasn't typed — the split, or the total it adds
+                up to — so entering it "the bank's way round" still shows
+                what the plan actually commits to (§7.2 v3.5). */}
+            {amount.value > 0 && periodsNum > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {amountMode === 'total'
+                  ? previewFinal === previewMonthly
+                    ? `${formatBaht(previewMonthly)} × ${periodsNum}`
+                    : `${formatBaht(previewMonthly)} × ${periodsNum - 1}, last period ${formatBaht(previewFinal)}`
+                  : `${formatBaht(previewTotal)} total`}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -167,15 +220,14 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
             <InstrumentSelect value={instrument} onChange={setInstrument} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="inst-rate">Annual interest rate (%)</Label>
-              <Input id="inst-rate" type="number" inputMode="decimal" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Owner</Label>
-              <OwnerSelect value={ownerId} onChange={setOwnerId} />
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="inst-rate">Annual interest rate (%)</Label>
+            <Input id="inst-rate" type="number" inputMode="decimal" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Who bears</Label>
+            <SimpleWhoBears members={members} selfId={self.id} value={ownerId} onChange={setOwnerId} />
           </div>
 
           <div className="flex items-center justify-between rounded-xl border p-3">
@@ -194,11 +246,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
 
         <DrawerFooter>
           {activeAmount ? (
-            <Keypad
-              onKey={activeAmount === 'monthly' ? monthlyAmount.press : finalAmount.press}
-              onEquals={activeAmount === 'monthly' ? monthlyAmount.pressEquals : finalAmount.pressEquals}
-              onDone={() => setActiveAmount(null)}
-            />
+            <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={() => setActiveAmount(false)} />
           ) : (
             <div className="flex gap-2">
               {installment && (

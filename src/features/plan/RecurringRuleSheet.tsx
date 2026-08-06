@@ -11,7 +11,7 @@ import { AmountField } from '@/components/AmountField'
 import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
-import { OwnerSelect } from '@/components/OwnerSelect'
+import { SimpleWhoBears } from '@/components/SimpleWhoBears'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
@@ -45,7 +45,7 @@ interface Props {
 }
 
 export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
-  const { householdId, self } = useHousehold()
+  const { householdId, self, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const create = useCreateRecurringRule(householdId)
   const update = useUpdateRecurringRule(householdId)
@@ -98,6 +98,10 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
     setKind(next)
     const current = categories?.find((c) => c.id === categoryId)
     if (current && current.kind !== next) setCategoryId(null)
+    // Income is never split (ADR-0002) — the Who-bears picker hides for it,
+    // so a "Split evenly"/other-person choice left over from Expense must
+    // not silently leave income owned by nobody.
+    if (next !== 'expense' && ownerId !== self.id) setOwnerId(self.id)
   }
 
   async function handleSave() {
@@ -195,10 +199,12 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <Label>Owner</Label>
-            <OwnerSelect value={ownerId} onChange={setOwnerId} />
-          </div>
+          {kind === 'expense' && (
+            <div className="space-y-1.5">
+              <Label>Who bears</Label>
+              <SimpleWhoBears members={members} selfId={self.id} value={ownerId} onChange={setOwnerId} />
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
