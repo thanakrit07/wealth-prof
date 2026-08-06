@@ -15,12 +15,18 @@ import { InstallmentMaterialiser } from '@/features/installments/InstallmentMate
 import { PlanScreen } from '@/features/plan/PlanScreen'
 import { RecurringMaterialiser } from '@/features/plan/RecurringMaterialiser'
 import { SettingsScreen } from '@/features/settings/SettingsScreen'
+import { useCards } from './lib/cards'
+import { addDays, cycleOf } from './lib/finance/billingCycle'
 import { fetchOwnMember, type HouseholdMember } from './lib/household'
 import { HouseholdProvider } from './lib/HouseholdContext'
 import { useUrlState } from './hooks/useUrlState'
-import { currentMonthKey } from './lib/month'
+import { currentMonthKey, dayMonthLabel } from './lib/month'
 import type { PersonFilter } from './lib/filters'
 import { useSession } from './lib/useSession'
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
 
 function SignedInApp({ self }: { self: HouseholdMember }) {
   const [month, setMonth] = useUrlState('month', currentMonthKey())
@@ -31,9 +37,17 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
   const [tab, setTab] = useUrlState('tab', 'transactions')
   const [category, setCategory] = useUrlState('cat', '')
   const [account, setAccount] = useUrlState('acct', '')
+  const [cardId, setCardId] = useUrlState('crd', '')
+  // Ephemeral, unlike the filters above: it's which cycle a card's detail is
+  // scrolled to, not a fact worth round-tripping through a shared link.
+  // Reset to today whenever a (possibly different) card is opened.
+  const [cardAnchor, setCardAnchor] = useState(todayIso())
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const { data: cards } = useCards(self.household_id)
+  const activeCard = cardId ? ((cards ?? []).find((c) => c.id === cardId) ?? null) : null
+  const activeCycle = activeCard ? cycleOf(activeCard, cardAnchor) : null
 
   // Records/Balances/Upcoming — the tab bar's own keys — mapped onto the
   // URL's legacy tab names so an old bookmark for the removed Overview/Plan
@@ -51,6 +65,9 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
         onClearCategory={() => setCategory('')}
         accountId={account || null}
         onClearAccount={() => setAccount('')}
+        card={activeCard}
+        cardCycle={activeCycle}
+        onClearCard={() => setCardId('')}
       />
     ),
     balances: (
@@ -58,6 +75,11 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
         person={person as PersonFilter}
         onOpenAccount={(accountId) => {
           setAccount(accountId)
+          setTab('transactions')
+        }}
+        onOpenCard={(id) => {
+          setCardId(id)
+          setCardAnchor(todayIso())
           setTab('transactions')
         }}
       />
@@ -80,6 +102,15 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
         onOpenSettings={() => setSettingsOpen(true)}
         search={search}
         onSearchChange={setSearch}
+        cardCycle={
+          activeCard && activeCycle
+            ? {
+                label: `${dayMonthLabel(activeCycle.start)} – ${dayMonthLabel(activeCycle.end)}`,
+                onPrev: () => setCardAnchor(addDays(activeCycle.start, -1)),
+                onNext: () => setCardAnchor(addDays(activeCycle.end, 1)),
+              }
+            : null
+        }
       >
         {/* Inside the shell, so a screen that throws leaves the bottom nav
             usable — tapping any other tab is itself the recovery, and the

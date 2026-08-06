@@ -28,7 +28,6 @@ import { useTransactions } from '@/lib/transactions'
 import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
 import { SettleUpSheet } from '@/features/home/SettleUpSheet'
-import { CardCycleDialog } from './CardCycleDialog'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
@@ -167,9 +166,10 @@ function BetweenUsSection() {
 interface Props {
   person: PersonFilter
   onOpenAccount: (accountId: string) => void
+  onOpenCard: (cardId: string) => void
 }
 
-export function AccountsScreen({ person, onOpenAccount }: Props) {
+export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   const { householdId, members } = useHousehold()
   const { data: accounts } = useAccounts(householdId)
   const { data: cards } = useCards(householdId)
@@ -177,7 +177,6 @@ export function AccountsScreen({ person, onOpenAccount }: Props) {
   const { data: debts } = useUnsettledShares(householdId)
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
-  const [viewingCycleCard, setViewingCycleCard] = useState<Card | null>(null)
   const [deleting, setDeleting] = useState<{ kind: InstrumentKind; id: string; name: string } | null>(null)
   const [netWorthOpen, setNetWorthOpen] = useState(false)
 
@@ -259,7 +258,7 @@ export function AccountsScreen({ person, onOpenAccount }: Props) {
                 key={card.id}
                 card={card}
                 outstanding={cardOutstanding(card, allTxns)}
-                onOpen={() => !card.archived && setViewingCycleCard(card)}
+                onOpen={() => !card.archived && onOpenCard(card.id)}
                 onEdit={() => setEditingCard(card)}
                 onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
               />
@@ -311,7 +310,7 @@ export function AccountsScreen({ person, onOpenAccount }: Props) {
                 key={card.id}
                 card={card}
                 outstanding={cardOutstanding(card, allTxns)}
-                onOpen={() => !card.archived && setViewingCycleCard(card)}
+                onOpen={() => !card.archived && onOpenCard(card.id)}
                 onEdit={() => setEditingCard(card)}
                 onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
               />
@@ -338,7 +337,6 @@ export function AccountsScreen({ person, onOpenAccount }: Props) {
           onClose={() => setEditingCard(null)}
         />
       )}
-      {viewingCycleCard && <CardCycleDialog card={viewingCycleCard} onClose={() => setViewingCycleCard(null)} />}
       {deleting && <DeleteInstrumentDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
   )

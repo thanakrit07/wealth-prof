@@ -5,6 +5,8 @@ import { toast } from 'sonner'
 import { SwipeableRow } from '@/components/SwipeableRow'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
+import type { Card } from '@/lib/cards'
+import type { Cycle } from '@/lib/finance/billingCycle'
 import { useInstrumentNames } from '@/lib/instruments'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { borneAmount, matchesPersonFilter, sharesByTransaction, type PersonFilter } from '@/lib/filters'
@@ -16,6 +18,7 @@ import { useInstallmentPayments, useSetPeriodPaid } from '@/lib/installments'
 import { useTransactionShares } from '@/lib/transactionShares'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
+import { CardCycleSummary } from './CardCycleSummary'
 import { ReviewStrip } from './ReviewStrip'
 import { TransactionSheet } from './TransactionSheet'
 
@@ -31,6 +34,12 @@ interface Props {
   onClearCategory?: () => void
   accountId?: string | null
   onClearAccount?: () => void
+  // A card's natural period is its billing cycle, not the calendar month
+  // (§7.3 v3.8) — when set, this overrides `month` for the fetch range and
+  // swaps the usual In/Out summary for CardCycleSummary's bill total.
+  card?: Card | null
+  cardCycle?: Cycle | null
+  onClearCard?: () => void
 }
 
 interface MainRow {
@@ -39,9 +48,23 @@ interface MainRow {
   subs: { category: Category; total: number }[]
 }
 
-export function TransactionsScreen({ month, person, search, categoryId, onClearCategory, accountId, onClearAccount }: Props) {
+export function TransactionsScreen({
+  month,
+  person,
+  search,
+  categoryId,
+  onClearCategory,
+  accountId,
+  onClearAccount,
+  card,
+  cardCycle,
+  onClearCard,
+}: Props) {
   const { householdId, members } = useHousehold()
-  const range = useMemo(() => monthRange(month), [month])
+  const range = useMemo(
+    () => (cardCycle ? { start: cardCycle.start, end: cardCycle.end } : monthRange(month)),
+    [month, cardCycle],
+  )
   const { data: transactions } = useTransactions(householdId, range)
   const { data: categories } = useCategories(householdId)
   const { data: shares } = useTransactionShares(householdId)
@@ -97,6 +120,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
   }
   const matchesAccount = (t: Transaction) =>
     !accountId || t.from_account_id === accountId || t.to_account_id === accountId
+  const matchesCard = (t: Transaction) => !card || t.from_card_id === card.id || t.to_card_id === card.id
   const matchesSearch = (t: Transaction) => {
     if (!search.trim()) return true
     const q = search.trim().toLowerCase()
@@ -109,8 +133,18 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
   }
 
   const filtered = confirmed.filter(
-    (t) => matchesPersonFilter(t, sharesByTxn, person) && matchesCategory(t) && matchesAccount(t) && matchesSearch(t),
+    (t) =>
+      matchesPersonFilter(t, sharesByTxn, person) &&
+      matchesCategory(t) &&
+      matchesAccount(t) &&
+      matchesCard(t) &&
+      matchesSearch(t),
   )
+  // CardCycleSummary wants every one of the card's rows in the cycle
+  // (charges and payments alike), not the person/category/search-narrowed
+  // list below — the bill total isn't a "your share" figure.
+  const cardTransactions = useMemo(() => (card ? confirmed.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id) : []), [card, confirmed])
+
   // D14: the headline is what this person Borne, not the face value of what
   // they're merely listed on — full amounts here would double-count a
   // shared row across both people's totals and break "A + B = All".
@@ -194,23 +228,27 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
       {/* One line (DESIGN §7.1 v3.5): the planning figures are the reason to
           open Records, but the daily habit is "jot → check the list", so the
           summary can't push the first transaction off the screen. */}
-      <button
-        type="button"
-        onClick={() => setSummaryOpen((open) => !open)}
-        className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
-      >
-        <span className="flex-1 truncate">
-          In <span className="text-good">{formatBaht(income)}</span> · Out{' '}
-          {formatBaht(expense)}
-        </span>
-        <span className={cn('font-semibold', income - expense >= 0 ? 'text-good' : 'text-destructive')}>
-          {income - expense >= 0 ? '+' : ''}
-          {formatBaht(income - expense)}
-        </span>
-        <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', summaryOpen && 'rotate-180')} />
-      </button>
+      {card && cardCycle ? (
+        <CardCycleSummary card={card} cycle={cardCycle} cycleTransactions={cardTransactions} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setSummaryOpen((open) => !open)}
+          className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
+        >
+          <span className="flex-1 truncate">
+            In <span className="text-good">{formatBaht(income)}</span> · Out{' '}
+            {formatBaht(expense)}
+          </span>
+          <span className={cn('font-semibold', income - expense >= 0 ? 'text-good' : 'text-destructive')}>
+            {income - expense >= 0 ? '+' : ''}
+            {formatBaht(income - expense)}
+          </span>
+          <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', summaryOpen && 'rotate-180')} />
+        </button>
+      )}
 
-      {summaryOpen && personRows.length > 0 && (
+      {!card && summaryOpen && personRows.length > 0 && (
         <div className="divide-y rounded-2xl border bg-card">
           {personRows.map((row) => (
             <div key={row.key} className="flex items-center gap-2 px-3 py-2 text-sm">
@@ -302,6 +340,15 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
         >
           {instrumentName?.[`account:${accountId}`] ?? 'Account'}
           <X className="size-3" aria-label="Clear account filter" />
+        </button>
+      )}
+      {card && (
+        <button
+          onClick={onClearCard}
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+        >
+          {card.name}
+          <X className="size-3" aria-label="Clear card filter" />
         </button>
       )}
       {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this month.</p>}

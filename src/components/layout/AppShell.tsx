@@ -32,6 +32,10 @@ interface Props {
   search: string
   onSearchChange: (search: string) => void
   children: ReactNode
+  // A card's detail reuses Records (§7.3 v3.8), but its natural period is
+  // the billing cycle, not the calendar month — set while one is open to
+  // swap the month nav for cycle nav; null/undefined for the normal month.
+  cardCycle?: { label: string; onPrev: () => void; onNext: () => void } | null
 }
 
 export function AppShell({
@@ -46,6 +50,7 @@ export function AppShell({
   search,
   onSearchChange,
   children,
+  cardCycle,
 }: Props) {
   const { members } = useHousehold()
   const online = useOnline()
@@ -103,7 +108,17 @@ export function AppShell({
               <span className="size-9" />
             )}
 
-            {isRecords ? (
+            {isRecords && cardCycle ? (
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" onClick={cardCycle.onPrev} aria-label="Previous cycle">
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <span className="rounded-lg px-2 py-1 font-heading text-sm font-medium">{cardCycle.label}</span>
+                <Button variant="ghost" size="icon" onClick={cardCycle.onNext} aria-label="Next cycle">
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            ) : isRecords ? (
               <div className="flex items-center gap-1">
                 <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Previous month">
                   <ChevronLeft className="size-4" />
