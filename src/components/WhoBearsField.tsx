@@ -108,20 +108,8 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
                 value.mode === 'you' ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
               )}
             >
-              Just you
+              {members.find((m) => m.id === selfId)?.display_name ?? 'You'}
             </button>
-            {others.length > 0 && (
-              <button
-                type="button"
-                onClick={() => selectMode('split')}
-                className={cn(
-                  'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
-                  value.mode === 'split' ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
-                )}
-              >
-                Split evenly
-              </button>
-            )}
             {others.map((m) => (
               <button
                 key={m.id}
@@ -138,6 +126,18 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
             {others.length > 0 && (
               <button
                 type="button"
+                onClick={() => selectMode('split')}
+                className={cn(
+                  'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
+                  value.mode === 'split' ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground',
+                )}
+              >
+                Split evenly
+              </button>
+            )}
+            {others.length > 0 && (
+              <button
+                type="button"
                 onClick={() => selectMode('custom')}
                 className={cn(
                   'flex-1 rounded-lg border py-1.5 text-xs font-medium transition-colors',
@@ -149,7 +149,11 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
             )}
           </div>
 
-          {value.mode === 'custom' && (
+          {/* Not shown for a one-tap sole-bearer pick (soleBearer != null):
+              that selection is already complete, and popping the editable
+              breakdown open under it would look like more setup is needed
+              when there isn't any. */}
+          {value.mode === 'custom' && !soleBearer && (
             <div className="space-y-1.5">
               {members.map((m) => (
                 <div key={m.id} className="flex items-center gap-2 text-sm">

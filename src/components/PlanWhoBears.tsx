@@ -78,8 +78,8 @@ export function PlanWhoBears({ members, selfId, value, onChange, referenceAmount
         {(
           [
             { key: 'you', label: members.find((m) => m.id === selfId)?.display_name ?? 'You' },
-            ...(others.length > 0 ? [{ key: 'split', label: 'Split evenly' }] : []),
             ...others.map((m) => ({ key: m.id, label: m.display_name })),
+            ...(others.length > 0 ? [{ key: 'split', label: 'Split evenly' }] : []),
             ...(others.length > 0 ? [{ key: 'custom', label: 'Custom' }] : []),
           ] as const
         ).map((opt) => (
