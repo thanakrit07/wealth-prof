@@ -30,7 +30,10 @@ export function DatePickerPanel({ value, onChange, clearable }: Props) {
           formatCaption: (month) => `${format(month, 'MMMM')} ${toBuddhistYear(month.getFullYear())}`,
         }}
         fixedWeeks
-        className="w-full"
+        // The Calendar component's own default className paints bg-background
+        // — a different token from this panel's bg-popover (EntryPage), which
+        // is what showed up as a mismatched rectangle behind the grid.
+        className="w-9/10 bg-transparent"
       />
       {clearable && selected && (
         <Button type="button" variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={() => onChange('')}>
