@@ -103,6 +103,52 @@ export function computeShareRows(params: {
   return []
 }
 
+// A Recurring Rule's or Installment Plan's own Custom split (0026): ratios,
+// not fixed amounts, because a plan's periods don't all charge the same
+// figure (the final period absorbs a rounding remainder, ADR-0001) and a
+// rule's own amount can vary occurrence to occurrence — applying the same
+// ratios to whatever a given period/occurrence actually charges is what
+// keeps every instance proportional to the one the plan was set up with.
+export interface RatioSplit {
+  member_id: string
+  ratio: number
+}
+
+// The save gate for a Custom split: `null` (the heuristic path) is always
+// valid; a real split's ratios must actually sum to the whole thing. Without
+// this, a mistyped Custom entry saves the plan successfully and then fails
+// silently at every period — the materialiser only logs a sum-mismatch
+// error (the database's own check, 0022), never surfaces it to the user.
+export function isValidSplit(split: RatioSplit[] | null): boolean {
+  if (split === null) return true
+  if (split.length === 0) return false
+  const sum = split.reduce((s, r) => s + r.ratio, 0)
+  return Math.abs(sum - 1) < 0.001
+}
+
+// Largest-remainder method: floor every member's cents, then hand the
+// leftover cents one at a time to whoever's floor cut the most off their
+// share — fairer than always crediting the same position, and still exact
+// (every period's shares sum to that period's own amount, ADR-0001).
+export function applyRatioSplit(split: RatioSplit[], amount: number): ShareRow[] {
+  if (split.length === 0) return []
+  const totalCents = Math.round(amount * 100)
+  const raw = split.map((s) => totalCents * s.ratio)
+  const cents = raw.map(Math.floor)
+  let remainder = totalCents - cents.reduce((sum, c) => sum + c, 0)
+  const order = raw
+    .map((r, i) => ({ i, frac: r - cents[i] }))
+    .sort((a, b) => b.frac - a.frac)
+  for (const { i } of order) {
+    if (remainder <= 0) break
+    cents[i] += 1
+    remainder -= 1
+  }
+  return split
+    .map((s, i) => ({ member_id: s.member_id, share_amount: cents[i] / 100 }))
+    .filter((r) => r.share_amount > 0)
+}
+
 // Replaces a transaction's Split with a freshly computed one. A share that
 // is already settled blocks the delete (the guard trigger in 0024) rather
 // than silently rewriting a repayment's basis — that's left exactly as it

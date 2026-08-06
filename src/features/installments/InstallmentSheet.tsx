@@ -10,12 +10,13 @@ import { AmountField } from '@/components/AmountField'
 import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
-import { SimpleWhoBears } from '@/components/SimpleWhoBears'
+import { PlanWhoBears, type PlanWhoBearsValue } from '@/components/PlanWhoBears'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
+import { isValidSplit } from '@/lib/transactionShares'
 import {
   useCreateInstallment,
   useDeleteInstallment,
@@ -86,7 +87,10 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   })
   const [interestRate, setInterestRate] = useState(String(installment?.annual_interest_rate ?? '0'))
   const [isCashAdvance, setIsCashAdvance] = useState(installment?.is_cash_advance ?? false)
-  const [ownerId, setOwnerId] = useState<string | null>(installment ? installment.owner_id : (prefill?.ownerId ?? self.id))
+  const [whoBears, setWhoBears] = useState<PlanWhoBearsValue>({
+    ownerId: installment ? installment.owner_id : (prefill?.ownerId ?? self.id),
+    split: installment?.split ?? null,
+  })
   const [note, setNote] = useState(installment?.note ?? '')
 
   const flatExpenseCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
@@ -100,7 +104,12 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   // transactions' category_iff_not_transfer check rejects an expense with no
   // category — so a plan saved without one silently never posts.
   const canSave =
-    name.trim().length > 0 && periodsNum > 0 && amount.value > 0 && categoryId != null && Boolean(instrument.accountId || instrument.cardId)
+    name.trim().length > 0 &&
+    periodsNum > 0 &&
+    amount.value > 0 &&
+    categoryId != null &&
+    Boolean(instrument.accountId || instrument.cardId) &&
+    isValidSplit(whoBears.split)
 
   async function handleSave() {
     // The final period only ever differs from the rest by however the total
@@ -118,7 +127,8 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
       account_id: instrument.accountId,
       annual_interest_rate: Number(interestRate),
       is_cash_advance: isCashAdvance,
-      owner_id: ownerId,
+      owner_id: whoBears.ownerId,
+      split: whoBears.split,
       note: note || null,
       status: installment?.status ?? 'active',
     }
@@ -227,7 +237,13 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
 
           <div className="space-y-1.5">
             <Label>Who bears</Label>
-            <SimpleWhoBears members={members} selfId={self.id} value={ownerId} onChange={setOwnerId} />
+            <PlanWhoBears
+              members={members}
+              selfId={self.id}
+              value={whoBears}
+              onChange={setWhoBears}
+              referenceAmount={previewMonthly}
+            />
           </div>
 
           <div className="flex items-center justify-between rounded-xl border p-3">

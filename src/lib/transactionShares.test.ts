@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeShareRows } from './transactionShares'
+import { applyRatioSplit, computeShareRows, isValidSplit } from './transactionShares'
 
 const A = 'member-a'
 const B = 'member-b'
@@ -111,5 +111,86 @@ describe('computeShareRows', () => {
         }),
       ).toEqual([])
     })
+  })
+})
+
+describe('applyRatioSplit', () => {
+  it('applies fixed ratios to a given amount', () => {
+    expect(
+      applyRatioSplit(
+        [
+          { member_id: A, ratio: 0.6 },
+          { member_id: B, ratio: 0.4 },
+        ],
+        200,
+      ),
+    ).toEqual([
+      { member_id: A, share_amount: 120 },
+      { member_id: B, share_amount: 80 },
+    ])
+  })
+
+  it('gives the rounding remainder to the last member in the split, keeping every period proportional to its own amount', () => {
+    // A plan's final period rarely matches its regular ones (ADR-0001) — the
+    // same ratios must still sum back to whatever that period actually is.
+    const split = [
+      { member_id: A, ratio: 0.6 },
+      { member_id: B, ratio: 0.4 },
+    ]
+    const regular = applyRatioSplit(split, 1333.33)
+    expect(regular.reduce((sum, r) => sum + r.share_amount, 0)).toBeCloseTo(1333.33, 2)
+    const final = applyRatioSplit(split, 1333.36)
+    expect(final.reduce((sum, r) => sum + r.share_amount, 0)).toBeCloseTo(1333.36, 2)
+  })
+
+  it('drops a member whose ratio rounds to zero', () => {
+    expect(applyRatioSplit([{ member_id: A, ratio: 1 }], 0.01)).toEqual([{ member_id: A, share_amount: 0.01 }])
+    expect(
+      applyRatioSplit(
+        [
+          { member_id: A, ratio: 0.999 },
+          { member_id: B, ratio: 0.001 },
+        ],
+        0.01,
+      ),
+    ).toEqual([{ member_id: A, share_amount: 0.01 }])
+  })
+
+  it('returns nothing for an empty split', () => {
+    expect(applyRatioSplit([], 200)).toEqual([])
+  })
+})
+
+describe('isValidSplit', () => {
+  it('accepts null — the heuristic path needs no ratios', () => {
+    expect(isValidSplit(null)).toBe(true)
+  })
+
+  it('accepts ratios that sum to 1', () => {
+    expect(
+      isValidSplit([
+        { member_id: A, ratio: 0.6 },
+        { member_id: B, ratio: 0.4 },
+      ]),
+    ).toBe(true)
+  })
+
+  it('rejects an empty array — a Custom split with nobody in it', () => {
+    expect(isValidSplit([])).toBe(false)
+  })
+
+  it('rejects ratios that overshoot or undershoot 1 — the mistyped-Custom-panel case', () => {
+    // The bug this guards: typing amounts against the wrong reference (e.g.
+    // the plan's total instead of its per-period figure) produces ratios
+    // like 7.0 + 3.0 instead of 0.7 + 0.3 — silently saves the plan, then
+    // fails every period's share write with no visible error unless this
+    // gate catches it first.
+    expect(
+      isValidSplit([
+        { member_id: A, ratio: 7 },
+        { member_id: B, ratio: 3 },
+      ]),
+    ).toBe(false)
+    expect(isValidSplit([{ member_id: A, ratio: 0.5 }])).toBe(false)
   })
 })

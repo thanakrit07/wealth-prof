@@ -4,7 +4,7 @@ import type { RecurrenceFreq, MonthEndRule } from './finance/recurrence'
 import { supabase } from './supabase'
 import type { CategoryKind } from './categories'
 import type { TransactionKind } from './transactions'
-import { computeShareRows } from './transactionShares'
+import { applyRatioSplit, computeShareRows, type RatioSplit } from './transactionShares'
 
 export interface RecurringRule {
   id: string
@@ -33,10 +33,13 @@ export interface RecurringRule {
   variable_amount: boolean
   active: boolean
   last_generated_date: string | null
+  // A Custom split (0026), ratios summing to 1; null keeps the rule on the
+  // owner_id heuristic (D13's other three cases) unchanged.
+  split: RatioSplit[] | null
 }
 
 const RULE_COLUMNS =
-  'id, household_id, name, kind, category_id, category_kind, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, freq, interval, day_of_month, month_of_year, weekday, month_end, start_date, end_date, max_occurrences, auto_post, variable_amount, active, last_generated_date'
+  'id, household_id, name, kind, category_id, category_kind, amount, owner_id, from_account_id, from_card_id, to_account_id, to_card_id, note, freq, interval, day_of_month, month_of_year, weekday, month_end, start_date, end_date, max_occurrences, auto_post, variable_amount, active, last_generated_date, split'
 
 export function useRecurringRules(householdId: string) {
   return useQuery({
@@ -180,6 +183,7 @@ export async function materialiseDue(householdId: string, rules: RecurringRule[]
           frontingMemberId,
           amount: rule.amount,
           memberIds,
+          custom: rule.split ? applyRatioSplit(rule.split, rule.amount) : undefined,
         })
         if (shareRows.length > 0 && inserted && inserted.length > 0) {
           const { error: shareError } = await supabase.from('transaction_shares').insert(

@@ -11,11 +11,12 @@ import { AmountField } from '@/components/AmountField'
 import { DateField } from '@/components/DateField'
 import { InstrumentSelect, type Instrument } from '@/components/InstrumentSelect'
 import { Keypad } from '@/components/Keypad'
-import { SimpleWhoBears } from '@/components/SimpleWhoBears'
+import { PlanWhoBears, type PlanWhoBearsValue } from '@/components/PlanWhoBears'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useCategories } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useHousehold } from '@/lib/HouseholdContext'
+import { isValidSplit } from '@/lib/transactionShares'
 import type { MonthEndRule, RecurrenceFreq } from '@/lib/finance/recurrence'
 import {
   useCreateRecurringRule,
@@ -66,7 +67,10 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   })
   // Same trap as TransactionSheet: null means "shared" (§4.2), so a nullish
   // fallback would quietly reassign a shared rule to whoever edits it.
-  const [ownerId, setOwnerId] = useState<string | null>(rule ? rule.owner_id : (prefill?.ownerId ?? self.id))
+  const [whoBears, setWhoBears] = useState<PlanWhoBearsValue>({
+    ownerId: rule ? rule.owner_id : (prefill?.ownerId ?? self.id),
+    split: rule?.split ?? null,
+  })
   const [freq, setFreq] = useState<RecurrenceFreq>(rule?.freq ?? 'monthly')
   const [interval, setIntervalValue] = useState(String(rule?.interval ?? 1))
   const [dayOfMonth, setDayOfMonth] = useState(String(rule?.day_of_month ?? 1))
@@ -92,16 +96,19 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
     Number(interval) > 0 &&
     Boolean(from.accountId || from.cardId) &&
     (kind === 'transfer' ? Boolean(to.accountId || to.cardId) : Boolean(categoryId)) &&
-    (freq === 'weekly' || (Number(dayOfMonth) >= 1 && Number(dayOfMonth) <= 31))
+    (freq === 'weekly' || (Number(dayOfMonth) >= 1 && Number(dayOfMonth) <= 31)) &&
+    isValidSplit(whoBears.split)
 
   function changeKind(next: TransactionKind) {
     setKind(next)
     const current = categories?.find((c) => c.id === categoryId)
     if (current && current.kind !== next) setCategoryId(null)
     // Income is never split (ADR-0002) — the Who-bears picker hides for it,
-    // so a "Split evenly"/other-person choice left over from Expense must
-    // not silently leave income owned by nobody.
-    if (next !== 'expense' && ownerId !== self.id) setOwnerId(self.id)
+    // so a "Split evenly"/Custom/other-person choice left over from Expense
+    // must not silently leave income owned by nobody.
+    if (next !== 'expense' && (whoBears.ownerId !== self.id || whoBears.split)) {
+      setWhoBears({ ownerId: self.id, split: null })
+    }
   }
 
   async function handleSave() {
@@ -111,7 +118,8 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
       category_id: kind === 'transfer' ? null : categoryId,
       category_kind: kind === 'transfer' ? null : (kind as 'income' | 'expense'),
       amount: amount.value,
-      owner_id: ownerId,
+      owner_id: whoBears.ownerId,
+      split: whoBears.split,
       from_account_id: from.accountId,
       from_card_id: from.cardId,
       to_account_id: kind === 'transfer' ? to.accountId : null,
@@ -202,7 +210,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
           {kind === 'expense' && (
             <div className="space-y-1.5">
               <Label>Who bears</Label>
-              <SimpleWhoBears members={members} selfId={self.id} value={ownerId} onChange={setOwnerId} />
+              <PlanWhoBears members={members} selfId={self.id} value={whoBears} onChange={setWhoBears} referenceAmount={amount.value} />
             </div>
           )}
 

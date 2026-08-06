@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { parsePeriodSourceKey, periodSourceKey } from './installmentMaterialiser'
 import { supabase } from './supabase'
+import type { RatioSplit } from './transactionShares'
 
 export type InstallmentStatus = 'active' | 'done' | 'cancelled'
 
@@ -23,6 +24,9 @@ export interface Installment {
   owner_id: string | null
   note: string | null
   status: InstallmentStatus
+  // A Custom split (0026), ratios summing to 1; null keeps the plan on the
+  // owner_id heuristic (D13's other three cases) unchanged.
+  split: RatioSplit[] | null
 }
 
 export interface InstallmentPayment {
@@ -34,7 +38,7 @@ export interface InstallmentPayment {
 }
 
 const INSTALLMENT_COLUMNS =
-  'id, household_id, name, category_id, start_date, total_periods, monthly_amount, final_amount, card_id, account_id, annual_interest_rate, is_cash_advance, owner_id, note, status'
+  'id, household_id, name, category_id, start_date, total_periods, monthly_amount, final_amount, card_id, account_id, annual_interest_rate, is_cash_advance, owner_id, note, status, split'
 
 export function useInstallments(householdId: string) {
   return useQuery({

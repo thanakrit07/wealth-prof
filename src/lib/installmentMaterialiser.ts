@@ -1,7 +1,7 @@
 import { periodDate } from './finance/billingCycle'
 import type { Installment } from './installments'
 import { supabase } from './supabase'
-import { computeShareRows } from './transactionShares'
+import { applyRatioSplit, computeShareRows } from './transactionShares'
 
 // DESIGN.md §6.7/§4.5 (D11): an installment plan writes **every** period as
 // a real transaction the moment the plan exists — not just the periods due
@@ -130,7 +130,18 @@ export async function materialiseInstallmentsDue(
     const shareRowsToInsert = (inserted ?? []).flatMap((t) => {
       const amount = amountBySourceKey.get(t.source_key as string)
       if (amount == null) return []
-      return computeShareRows({ kind: 'expense', ownerId: inst.owner_id, frontingMemberId, amount, memberIds }).map((r) => ({
+      return computeShareRows({
+        kind: 'expense',
+        ownerId: inst.owner_id,
+        frontingMemberId,
+        amount,
+        memberIds,
+        // Applied per period, not once for the plan: the final period's
+        // amount differs (ADR-0001's rounding remainder), and each period
+        // must stay proportional to what it actually charges, not to the
+        // plan's nominal monthly figure.
+        custom: inst.split ? applyRatioSplit(inst.split, amount) : undefined,
+      }).map((r) => ({
         household_id: householdId,
         transaction_id: t.id as string,
         ...r,
