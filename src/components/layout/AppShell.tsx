@@ -58,6 +58,10 @@ export function AppShell({
   ]
 
   const isRecords = tab === 'records'
+  // Balances honours the person filter too now (D19) — "You" narrows it to
+  // your own accounts and cards, so the chips need to be reachable there,
+  // not just on Records.
+  const showPersonFilter = isRecords || tab === 'balances'
   const tabLabel = TABS.find((t) => t.key === tab)?.label ?? ''
 
   function closeSearch() {
@@ -125,7 +129,7 @@ export function AppShell({
           </div>
         )}
 
-        {isRecords && !searchOpen && (
+        {showPersonFilter && !searchOpen && (
           <div className="flex flex-wrap justify-center gap-1.5">
             {personOptions.map((opt) => (
               <button

@@ -30,6 +30,7 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
   // 'transactions' so existing bookmarks/URL state keep working.
   const [tab, setTab] = useUrlState('tab', 'transactions')
   const [category, setCategory] = useUrlState('cat', '')
+  const [account, setAccount] = useUrlState('acct', '')
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -48,9 +49,19 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
         search={search}
         categoryId={category || null}
         onClearCategory={() => setCategory('')}
+        accountId={account || null}
+        onClearAccount={() => setAccount('')}
       />
     ),
-    balances: <AccountsScreen />,
+    balances: (
+      <AccountsScreen
+        person={person as PersonFilter}
+        onOpenAccount={(accountId) => {
+          setAccount(accountId)
+          setTab('transactions')
+        }}
+      />
+    ),
     upcoming: <PlanScreen />,
   }
 

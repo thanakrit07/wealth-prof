@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Pencil, Plus } from 'lucide-react'
+import { ChevronDown, Pencil, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { DateField } from '@/components/DateField'
 import { SwipeableRow } from '@/components/SwipeableRow'
@@ -13,6 +13,8 @@ import { Switch } from '@/components/ui/switch'
 import { OwnerSelect } from '@/components/OwnerSelect'
 import { useAccounts, useCreateAccount, useUpdateAccount, type Account, type AccountType } from '@/lib/accounts'
 import { useCards, useCreateCard, useUpdateCard, type Card } from '@/lib/cards'
+import { accountBalance, cardOutstanding, memberNetWorth } from '@/lib/finance/balances'
+import type { PersonFilter } from '@/lib/filters'
 import { useHousehold } from '@/lib/HouseholdContext'
 import {
   isInstrumentBlocked,
@@ -22,10 +24,21 @@ import {
 } from '@/lib/instruments'
 import { formatBaht } from '@/lib/format'
 import { dayMonthLabel } from '@/lib/month'
+import { useTransactions } from '@/lib/transactions'
 import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
 import { SettleUpSheet } from '@/features/home/SettleUpSheet'
 import { CardCycleDialog } from './CardCycleDialog'
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+// Wide enough to hold every real row (anchor dates in the past) and every
+// installment period already posted ahead (ADR-0001 — years, not months).
+// Net worth needs the whole ledger, not a windowed slice like every other
+// screen's month/cycle range.
+const ALL_TIME = { start: '2000-01-01', end: '2100-01-01' }
 
 // D-0004: debts and their repayment history live here, not on Records —
 // what one person owes another is a current-state figure like an account
@@ -151,17 +164,110 @@ function BetweenUsSection() {
   )
 }
 
-export function AccountsScreen() {
-  const { householdId } = useHousehold()
+interface Props {
+  person: PersonFilter
+  onOpenAccount: (accountId: string) => void
+}
+
+export function AccountsScreen({ person, onOpenAccount }: Props) {
+  const { householdId, members } = useHousehold()
   const { data: accounts } = useAccounts(householdId)
   const { data: cards } = useCards(householdId)
+  const { data: transactions } = useTransactions(householdId, ALL_TIME)
+  const { data: debts } = useUnsettledShares(householdId)
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
   const [viewingCycleCard, setViewingCycleCard] = useState<Card | null>(null)
   const [deleting, setDeleting] = useState<{ kind: InstrumentKind; id: string; name: string } | null>(null)
+  const [netWorthOpen, setNetWorthOpen] = useState(false)
+
+  const today = todayIso()
+  const allAccounts = accounts ?? []
+  const allCards = cards ?? []
+  const allTxns = transactions ?? []
+  const allDebts = debts ?? []
+
+  // D18: a Common Pot has no owner and no per-person breakdown, so it sits
+  // outside every filter below — every person filter sees it, and it is
+  // never one of "mine" or "theirs".
+  const potAccounts = allAccounts.filter((a) => a.owner_id === null)
+  const potCards = allCards.filter((c) => c.owner_id === null)
+  const potBalance =
+    potAccounts.reduce((sum, a) => sum + accountBalance(a, allTxns, today), 0) -
+    potCards.reduce((sum, c) => sum + cardOutstanding(c, allTxns), 0)
+
+  // D19: Balances honours the person filter like every other screen — "You"
+  // shows only what's yours, so the app still works as a single-person
+  // ledger for someone who never opens the Between-us section.
+  const visibleAccounts = person === 'all' ? allAccounts : allAccounts.filter((a) => a.owner_id === person)
+  const visibleCards = person === 'all' ? allCards : allCards.filter((c) => c.owner_id === person)
+
+  const netWorthRows = members.map((m) => ({
+    member: m,
+    amount: memberNetWorth(m.id, allAccounts, allCards, allTxns, allDebts, today),
+  }))
+  const householdNetWorth = netWorthRows.reduce((sum, r) => sum + r.amount, 0)
+  const headlineNetWorth = person === 'all' ? householdNetWorth : (netWorthRows.find((r) => r.member.id === person)?.amount ?? 0)
 
   return (
     <div className="space-y-6 p-4">
+      <button
+        type="button"
+        onClick={() => setNetWorthOpen((o) => !o)}
+        className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
+      >
+        <span className="flex-1 text-muted-foreground">Net worth</span>
+        <span className={cn('font-semibold', headlineNetWorth >= 0 ? 'text-good' : 'text-destructive')}>
+          {formatBaht(headlineNetWorth)}
+        </span>
+        {person === 'all' && (
+          <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', netWorthOpen && 'rotate-180')} />
+        )}
+      </button>
+
+      {person === 'all' && netWorthOpen && netWorthRows.length > 0 && (
+        <div className="divide-y rounded-2xl border bg-card">
+          {netWorthRows.map((row) => (
+            <div key={row.member.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.member.color }} />
+              <span className="flex-1 truncate">{row.member.display_name}</span>
+              <span className={row.amount >= 0 ? 'text-good' : 'text-destructive'}>{formatBaht(row.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(potAccounts.length > 0 || potCards.length > 0) && (
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-muted-foreground">Common pot</h2>
+            <span className="text-sm font-medium">{formatBaht(potBalance)}</span>
+          </div>
+          <ul className="space-y-1">
+            {potAccounts.map((account) => (
+              <AccountRow
+                key={account.id}
+                account={account}
+                balance={accountBalance(account, allTxns, today)}
+                onOpen={() => onOpenAccount(account.id)}
+                onEdit={() => setEditingAccount(account)}
+                onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
+              />
+            ))}
+            {potCards.map((card) => (
+              <CardRow
+                key={card.id}
+                card={card}
+                outstanding={cardOutstanding(card, allTxns)}
+                onOpen={() => !card.archived && setViewingCycleCard(card)}
+                onEdit={() => setEditingCard(card)}
+                onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
@@ -171,25 +277,21 @@ export function AccountsScreen() {
           </Button>
         </div>
         <ul className="space-y-1">
-          {(accounts ?? []).map((account) => (
-            <li key={account.id} className="overflow-hidden rounded-lg border">
-              <SwipeableRow onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}>
-                <div className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <Badge variant="secondary" className="capitalize">
-                    {account.type}
-                  </Badge>
-                  <span className={account.archived ? 'flex-1 text-muted-foreground line-through' : 'flex-1'}>
-                    {account.name}
-                  </span>
-                  <span className="text-muted-foreground">{formatBaht(account.anchor_balance)}</span>
-                  <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingAccount(account)} aria-label="Edit">
-                    <Pencil className="size-3.5" />
-                  </Button>
-                </div>
-              </SwipeableRow>
-            </li>
-          ))}
-          {accounts?.length === 0 && <p className="text-sm text-muted-foreground">No accounts yet.</p>}
+          {visibleAccounts
+            .filter((a) => a.owner_id !== null)
+            .map((account) => (
+              <AccountRow
+                key={account.id}
+                account={account}
+                balance={accountBalance(account, allTxns, today)}
+                onOpen={() => onOpenAccount(account.id)}
+                onEdit={() => setEditingAccount(account)}
+                onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
+              />
+            ))}
+          {visibleAccounts.filter((a) => a.owner_id !== null).length === 0 && (
+            <p className="text-sm text-muted-foreground">No accounts yet.</p>
+          )}
         </ul>
       </section>
 
@@ -202,25 +304,21 @@ export function AccountsScreen() {
           </Button>
         </div>
         <ul className="space-y-1">
-          {(cards ?? []).map((card) => (
-            <li key={card.id} className="overflow-hidden rounded-lg border">
-              <SwipeableRow onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}>
-                <div className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <button
-                    onClick={() => !card.archived && setViewingCycleCard(card)}
-                    className={card.archived ? 'flex-1 text-left text-muted-foreground line-through' : 'flex-1 text-left'}
-                  >
-                    {card.name}
-                  </button>
-                  <span className="text-muted-foreground">{formatBaht(card.credit_limit)} limit</span>
-                  <Button variant="ghost" size="icon" className="size-7" onClick={() => setEditingCard(card)} aria-label="Edit">
-                    <Pencil className="size-3.5" />
-                  </Button>
-                </div>
-              </SwipeableRow>
-            </li>
-          ))}
-          {cards?.length === 0 && <p className="text-sm text-muted-foreground">No cards yet.</p>}
+          {visibleCards
+            .filter((c) => c.owner_id !== null)
+            .map((card) => (
+              <CardRow
+                key={card.id}
+                card={card}
+                outstanding={cardOutstanding(card, allTxns)}
+                onOpen={() => !card.archived && setViewingCycleCard(card)}
+                onEdit={() => setEditingCard(card)}
+                onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
+              />
+            ))}
+          {visibleCards.filter((c) => c.owner_id !== null).length === 0 && (
+            <p className="text-sm text-muted-foreground">No cards yet.</p>
+          )}
         </ul>
       </section>
 
@@ -243,6 +341,80 @@ export function AccountsScreen() {
       {viewingCycleCard && <CardCycleDialog card={viewingCycleCard} onClose={() => setViewingCycleCard(null)} />}
       {deleting && <DeleteInstrumentDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
+  )
+}
+
+function AccountRow({
+  account,
+  balance,
+  onOpen,
+  onEdit,
+  onDelete,
+}: {
+  account: Account
+  balance: number
+  onOpen: () => void
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  return (
+    <li className="overflow-hidden rounded-lg border">
+      <SwipeableRow onDelete={onDelete}>
+        <div className="flex items-center gap-2 px-3 py-2 text-sm">
+          <Badge variant="secondary" className="capitalize">
+            {account.type}
+          </Badge>
+          <button
+            onClick={onOpen}
+            disabled={account.archived}
+            className={account.archived ? 'flex-1 truncate text-left text-muted-foreground line-through' : 'flex-1 truncate text-left'}
+          >
+            {account.name}
+          </button>
+          <span className="text-muted-foreground">{formatBaht(balance)}</span>
+          <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} aria-label="Edit">
+            <Pencil className="size-3.5" />
+          </Button>
+        </div>
+      </SwipeableRow>
+    </li>
+  )
+}
+
+function CardRow({
+  card,
+  outstanding,
+  onOpen,
+  onEdit,
+  onDelete,
+}: {
+  card: Card
+  outstanding: number
+  onOpen: () => void
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const available = card.credit_limit - outstanding
+  return (
+    <li className="overflow-hidden rounded-lg border">
+      <SwipeableRow onDelete={onDelete}>
+        <div className="flex items-center gap-2 px-3 py-2 text-sm">
+          <button
+            onClick={onOpen}
+            className={card.archived ? 'flex-1 truncate text-left text-muted-foreground line-through' : 'flex-1 truncate text-left'}
+          >
+            {card.name}
+          </button>
+          <span className="text-right text-muted-foreground">
+            <span className="block">{formatBaht(outstanding)} owed</span>
+            <span className="block text-xs">{formatBaht(available)} left</span>
+          </span>
+          <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} aria-label="Edit">
+            <Pencil className="size-3.5" />
+          </Button>
+        </div>
+      </SwipeableRow>
+    </li>
   )
 }
 

@@ -29,6 +29,8 @@ interface Props {
   search: string
   categoryId?: string | null
   onClearCategory?: () => void
+  accountId?: string | null
+  onClearAccount?: () => void
 }
 
 interface MainRow {
@@ -37,7 +39,7 @@ interface MainRow {
   subs: { category: Category; total: number }[]
 }
 
-export function TransactionsScreen({ month, person, search, categoryId, onClearCategory }: Props) {
+export function TransactionsScreen({ month, person, search, categoryId, onClearCategory, accountId, onClearAccount }: Props) {
   const { householdId, members } = useHousehold()
   const range = useMemo(() => monthRange(month), [month])
   const { data: transactions } = useTransactions(householdId, range)
@@ -93,6 +95,8 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
     const category = t.category_id ? categoryById.get(t.category_id) : null
     return category != null && effectiveMainId(category) === categoryId
   }
+  const matchesAccount = (t: Transaction) =>
+    !accountId || t.from_account_id === accountId || t.to_account_id === accountId
   const matchesSearch = (t: Transaction) => {
     if (!search.trim()) return true
     const q = search.trim().toLowerCase()
@@ -105,7 +109,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
   }
 
   const filtered = confirmed.filter(
-    (t) => matchesPersonFilter(t, sharesByTxn, person) && matchesCategory(t) && matchesSearch(t),
+    (t) => matchesPersonFilter(t, sharesByTxn, person) && matchesCategory(t) && matchesAccount(t) && matchesSearch(t),
   )
   // D14: the headline is what this person Borne, not the face value of what
   // they're merely listed on — full amounts here would double-count a
@@ -289,6 +293,15 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
           <CategoryIcon icon={filterCategory.icon} color={filterCategory.color} className="size-3.5" />
           {filterCategory.name}
           <X className="size-3" aria-label="Clear category filter" />
+        </button>
+      )}
+      {accountId && (
+        <button
+          onClick={onClearAccount}
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+        >
+          {instrumentName?.[`account:${accountId}`] ?? 'Account'}
+          <X className="size-3" aria-label="Clear account filter" />
         </button>
       )}
       {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this month.</p>}
