@@ -254,6 +254,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
       <EntryPage
         title={transaction ? 'Edit transaction' : 'Add transaction'}
         onClose={() => onOpenChange(false)}
+        panelOpen={panel.active !== null}
         footer={
           panel.active === 'amount' ? (
             <Keypad onKey={amountField.press} onEquals={amountField.pressEquals} onDone={panel.close} />

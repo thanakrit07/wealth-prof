@@ -29,6 +29,8 @@ export function DatePickerPanel({ value, onChange, clearable }: Props) {
         formatters={{
           formatCaption: (month) => `${format(month, 'MMMM')} ${toBuddhistYear(month.getFullYear())}`,
         }}
+        fixedWeeks
+        className="w-full"
       />
       {clearable && selected && (
         <Button type="button" variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={() => onChange('')}>

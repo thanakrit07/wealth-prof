@@ -178,6 +178,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
     <EntryPage
       title={rule ? 'Edit recurring rule' : 'New recurring rule'}
       onClose={onClose}
+      panelOpen={panel.active !== null}
       footer={
         panel.active === 'amount' ? (
           <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={panel.close} />

@@ -168,6 +168,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
     <EntryPage
       title={installment ? 'Edit installment' : 'New installment'}
       onClose={onClose}
+      panelOpen={panel.active !== null}
       footer={
         panel.active === 'amount' ? (
           <Keypad onKey={amount.press} onEquals={amount.pressEquals} onDone={panel.close} />
