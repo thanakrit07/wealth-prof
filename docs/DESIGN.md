@@ -573,7 +573,7 @@ current balance = anchor_balance
 
 For installments billed directly to an account, marking a period paid always creates the paired transaction (`installment_payments.transaction_id`). That transaction is the only thing that moves the balance, so there is no path to double counting or to silent drift.
 
-**Not built yet, and there is a trap waiting for whoever builds it** *(v3.4)*. `AccountsScreen` currently displays `anchor_balance` raw — nothing sums transactions against it. When this is implemented, the sum must also be bounded by `date <= today`: installment periods are posted for the whole plan up front ([ADR-0001](./adr/0001-installments-post-ahead-recurring-does-not.md)), so an unbounded sum subtracts payments that have not happened yet and reports a balance that is short by the rest of the plan. Every figure that adds transactions up over time inherits the same requirement.
+**Built** *(v3.7, `src/lib/finance/balances.ts`, `accountBalance`)*. The sum is bounded by `date <= today`, per the trap this section used to warn about: installment periods are posted for the whole plan up front ([ADR-0001](./adr/0001-installments-post-ahead-recurring-does-not.md)), so an unbounded sum would subtract payments that have not happened yet and report a balance short by the rest of the plan. `cardOutstanding` is the same shape deliberately *un*bounded — see §6.3b and [ADR-0008](./adr/0008-balances-shows-capacity-per-row-and-net-worth-in-the-headline.md) for why the two must differ.
 
 ### 6.3b Net worth and the person filter (D19 — v3.7)
 
