@@ -53,6 +53,14 @@ export function effectiveMainId(category: Pick<Category, 'id' | 'parent_id'>): s
   return category.parent_id ?? category.id
 }
 
+// A sub-category reads as "Main/Sub" wherever it's shown on its own — its
+// own name alone would drop which main it rolls up to (D10).
+export function categoryPath(category: Pick<Category, 'name' | 'parent_id'>, categories: Category[]): string {
+  if (!category.parent_id) return category.name
+  const main = categories.find((c) => c.id === category.parent_id)
+  return main ? `${main.name}/${category.name}` : category.name
+}
+
 export function useCreateCategory(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({

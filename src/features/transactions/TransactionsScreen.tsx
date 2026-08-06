@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRightLeft, Check, ChevronDown, ChevronRight, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { SwipeableRow } from '@/components/SwipeableRow'
 import { CategoryIcon } from '@/lib/categoryIcons'
-import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
+import { categoryPath, effectiveMainId, useCategories, type Category } from '@/lib/categories'
 import type { Card } from '@/lib/cards'
 import type { Cycle } from '@/lib/finance/billingCycle'
 import { useInstrumentNames } from '@/lib/instruments'
@@ -72,6 +73,7 @@ export function TransactionsScreen({
   // where the money actually moved (see useInstrumentNames).
   const { data: instrumentName } = useInstrumentNames(householdId)
   const [editing, setEditing] = useState<Transaction | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<Transaction | null>(null)
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [categoriesOpen, setCategoriesOpen] = useState(false)
   const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
@@ -238,7 +240,7 @@ export function TransactionsScreen({
         >
           <span className="flex-1 truncate">
             In <span className="text-good">{formatBaht(income)}</span> · Out{' '}
-            {formatBaht(expense)}
+            <span className="text-destructive">{formatBaht(expense)}</span>
           </span>
           <span className={cn('font-semibold', income - expense >= 0 ? 'text-good' : 'text-destructive')}>
             {income - expense >= 0 ? '+' : ''}
@@ -255,7 +257,7 @@ export function TransactionsScreen({
               <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
               <span className="flex-1 truncate">{row.label}</span>
               <span className="text-good">+{formatBaht(row.income)}</span>
-              <span className="text-muted-foreground">-{formatBaht(row.expense)}</span>
+              <span className="text-destructive">-{formatBaht(row.expense)}</span>
             </div>
           ))}
         </div>
@@ -370,7 +372,7 @@ export function TransactionsScreen({
                   {dayIncome > 0 && (
                     <span className="text-good">{formatBaht(dayIncome)}</span>
                   )}
-                  {dayExpense > 0 && <span className="text-muted-foreground">{formatBaht(dayExpense)}</span>}
+                  {dayExpense > 0 && <span className="text-destructive">{formatBaht(dayExpense)}</span>}
                 </span>
               </div>
 
@@ -378,12 +380,13 @@ export function TransactionsScreen({
                 {items.map((t) => {
                   const category = t.category_id ? categoryById.get(t.category_id) : null
                   const owner = t.owner_id ? memberById.get(t.owner_id) : null
+                  const catPath = category ? categoryPath(category, categories ?? []) : null
                   const title =
                     t.kind === 'transfer'
                       ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
-                      : t.note || category?.name || t.kind
+                      : t.note || catPath || t.kind
                   // Category only repeats below when it isn't already the title.
-                  const details = [category?.name === title ? null : category?.name, instrumentLabel(t, 'from'), owner?.display_name]
+                  const details = [catPath === title ? null : catPath, instrumentLabel(t, 'from'), owner?.display_name]
                     .filter(Boolean)
                     .join(' · ')
                   // Under a specific person's filter, a shared row's full
@@ -396,7 +399,7 @@ export function TransactionsScreen({
                   const periodPaid = periodKey != null && paidKeys.has(periodKey)
                   return (
                     <li key={t.id} className="border-t">
-                      <SwipeableRow onDelete={() => handleDelete(t)}>
+                      <SwipeableRow onDelete={() => setConfirmingDelete(t)}>
                         <div className="flex items-center">
                           <button
                             onClick={() => setEditing(t)}
@@ -409,7 +412,10 @@ export function TransactionsScreen({
                             )}
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center gap-1.5">
-                                <span className={cn('truncate text-sm', periodPaid && 'text-muted-foreground')}>{title}</span>
+                                <span className={cn('truncate text-sm', periodPaid && 'text-muted-foreground')}>
+                                  {title}
+                                  {t.description && <span className="text-muted-foreground"> — {t.description}</span>}
+                                </span>
                                 {!t.confirmed && (
                                   <span className="shrink-0 rounded-full bg-warning px-1.5 text-[10px] text-warning-foreground">
                                     Pending
@@ -428,9 +434,9 @@ export function TransactionsScreen({
                                 'shrink-0 text-sm tabular-nums',
                                 t.kind === 'income'
                                   ? 'text-good'
-                                  : t.kind === 'transfer'
-                                    ? 'text-muted-foreground'
-                                    : 'text-foreground',
+                                  : t.kind === 'expense'
+                                    ? 'text-destructive'
+                                    : 'text-muted-foreground',
                               )}
                             >
                               {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
@@ -483,6 +489,14 @@ export function TransactionsScreen({
       </div>
 
       {editing && <TransactionSheet open onOpenChange={(open) => !open && setEditing(null)} transaction={editing} />}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this transaction?"
+          description="Removes it from every total. You'll have a few seconds to undo right after."
+          onConfirm={() => handleDelete(confirmingDelete)}
+          onClose={() => setConfirmingDelete(null)}
+        />
+      )}
     </div>
   )
 }

@@ -8,6 +8,7 @@ import { AmountField } from '@/components/AmountField'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
 import { DatePickerPanel } from '@/components/DatePickerPanel'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EntryPage } from '@/components/EntryPage'
 import { EntryRow } from '@/components/EntryRow'
 import { InstrumentPickerPanel } from '@/components/InstrumentPickerPanel'
@@ -18,7 +19,7 @@ import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useEntryPanel } from '@/hooks/useEntryPanel'
 import { useAccounts } from '@/lib/accounts'
 import { useCards } from '@/lib/cards'
-import { useCategories, type Category } from '@/lib/categories'
+import { categoryPath, useCategories, type Category } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
@@ -108,6 +109,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
     split: installment?.split ?? null,
   })
   const [note, setNote] = useState(installment?.note ?? '')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
   const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
@@ -165,6 +167,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   }
 
   return (
+    <>
     <EntryPage
       title={installment ? 'Edit installment' : 'New installment'}
       onClose={onClose}
@@ -201,7 +204,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
         ) : (
           <div className="flex gap-2">
             {installment && (
-              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete installment">
+              <Button variant="outline" size="icon" onClick={() => setConfirmingDelete(true)} aria-label="Delete installment">
                 <Trash2 className="size-4" />
               </Button>
             )}
@@ -230,7 +233,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
           selectedCategory ? (
             <span className="flex items-center gap-1.5">
               <CategoryIcon icon={selectedCategory.icon} color={selectedCategory.color} className="size-4" />
-              {selectedCategory.name}
+              {categoryPath(selectedCategory, categories ?? [])}
             </span>
           ) : (
             'Choose a category'
@@ -311,5 +314,14 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
         <Input id="inst-note" value={note} onChange={(e) => setNote(e.target.value)} onFocus={panel.close} />
       </div>
     </EntryPage>
+    {confirmingDelete && (
+      <ConfirmDialog
+        title="Delete this installment plan?"
+        description="Its periods stay in the ledger as ordinary transactions — this only removes the plan itself."
+        onConfirm={handleDelete}
+        onClose={() => setConfirmingDelete(false)}
+      />
+    )}
+    </>
   )
 }

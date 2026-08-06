@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AmountField } from '@/components/AmountField'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { DatePickerPanel } from '@/components/DatePickerPanel'
 import { EntryPage } from '@/components/EntryPage'
 import { EntryRow } from '@/components/EntryRow'
@@ -18,7 +19,7 @@ import { Keypad } from '@/components/Keypad'
 import { evenSplit, WhoBearsField, type WhoBearsValue } from '@/components/WhoBearsField'
 import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useEntryPanel } from '@/hooks/useEntryPanel'
-import { useCategories, type Category } from '@/lib/categories'
+import { categoryPath, useCategories, type Category } from '@/lib/categories'
 import { useCategoryUsage } from '@/lib/categoryUsage'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useAccounts } from '@/lib/accounts'
@@ -113,6 +114,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const [creating, setCreating] = useState<'recurring' | 'installment' | null>(null)
 
   const [detailsOpen, setDetailsOpen] = useState(Boolean(transaction?.description))
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   // Once the user picks an instrument by hand (or is editing an existing
   // row), category taps must stop auto-overriding it.
   const [fromTouched, setFromTouched] = useState(Boolean(transaction))
@@ -296,7 +298,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           ) : (
             <div className="flex gap-2">
               {transaction && (
-                <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete transaction">
+                <Button variant="outline" size="icon" onClick={() => setConfirmingDelete(true)} aria-label="Delete transaction">
                   <Trash2 className="size-4" />
                 </Button>
               )}
@@ -338,7 +340,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
               selectedCategory ? (
                 <span className="flex items-center gap-1.5">
                   <CategoryIcon icon={selectedCategory.icon} color={selectedCategory.color} className="size-4" />
-                  {selectedCategory.name}
+                  {categoryPath(selectedCategory, categories ?? [])}
                 </span>
               ) : (
                 'Choose a category'
@@ -460,6 +462,14 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
             setCreating(null)
             onOpenChange(false)
           }}
+        />
+      )}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this transaction?"
+          description="Removes it from every total. This can't be undone from here."
+          onConfirm={handleDelete}
+          onClose={() => setConfirmingDelete(false)}
         />
       )}
     </>
