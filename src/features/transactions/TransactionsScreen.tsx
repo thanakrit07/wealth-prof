@@ -196,10 +196,10 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
         className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
       >
         <span className="flex-1 truncate">
-          In <span className="text-emerald-600 dark:text-emerald-400">{formatBaht(income)}</span> · Out{' '}
+          In <span className="text-good">{formatBaht(income)}</span> · Out{' '}
           {formatBaht(expense)}
         </span>
-        <span className={cn('font-semibold', income - expense >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+        <span className={cn('font-semibold', income - expense >= 0 ? 'text-good' : 'text-destructive')}>
           {income - expense >= 0 ? '+' : ''}
           {formatBaht(income - expense)}
         </span>
@@ -212,7 +212,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
             <div key={row.key} className="flex items-center gap-2 px-3 py-2 text-sm">
               <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
               <span className="flex-1 truncate">{row.label}</span>
-              <span className="text-emerald-600 dark:text-emerald-400">+{formatBaht(row.income)}</span>
+              <span className="text-good">+{formatBaht(row.income)}</span>
               <span className="text-muted-foreground">-{formatBaht(row.expense)}</span>
             </div>
           ))}
@@ -308,7 +308,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
                 </span>
                 <span className="ml-auto flex items-center gap-3 text-[11px] tabular-nums">
                   {dayIncome > 0 && (
-                    <span className="text-emerald-600 dark:text-emerald-400">{formatBaht(dayIncome)}</span>
+                    <span className="text-good">{formatBaht(dayIncome)}</span>
                   )}
                   {dayExpense > 0 && <span className="text-muted-foreground">{formatBaht(dayExpense)}</span>}
                 </span>
@@ -351,7 +351,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
                               <span className="flex items-center gap-1.5">
                                 <span className={cn('truncate text-sm', periodPaid && 'text-muted-foreground')}>{title}</span>
                                 {!t.confirmed && (
-                                  <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                                  <span className="shrink-0 rounded-full bg-warning px-1.5 text-[10px] text-warning-foreground">
                                     Pending
                                   </span>
                                 )}
@@ -367,7 +367,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
                               className={cn(
                                 'shrink-0 text-sm tabular-nums',
                                 t.kind === 'income'
-                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  ? 'text-good'
                                   : t.kind === 'transfer'
                                     ? 'text-muted-foreground'
                                     : 'text-foreground',
@@ -401,7 +401,7 @@ export function TransactionsScreen({ month, person, search, categoryId, onClearC
                                 className={cn(
                                   'flex size-5 items-center justify-center rounded-md border transition-colors',
                                   periodPaid
-                                    ? 'border-emerald-500 bg-emerald-500 text-white'
+                                    ? 'border-good bg-good text-white'
                                     : 'border-muted-foreground/40 text-transparent',
                                 )}
                               >

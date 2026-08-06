@@ -76,7 +76,7 @@ export function InstallmentsScreen() {
                 <button onClick={() => setEditing(inst)} className="min-w-0 flex-1 text-left">
                   <span className="flex items-center gap-1.5 truncate text-sm font-medium">
                     {inst.name}
-                    {highInterest && <AlertTriangle className="size-3.5 shrink-0 text-amber-500" />}
+                    {highInterest && <AlertTriangle className="size-3.5 shrink-0 text-warning-foreground" />}
                   </span>
                   <span className="block text-xs text-muted-foreground">
                     {paid}/{inst.total_periods} paid · {formatBaht(outstanding)} left
@@ -124,7 +124,7 @@ export function InstallmentsScreen() {
                           className={
                             'w-full rounded-lg border px-1.5 py-1 text-center text-[11px] transition-colors ' +
                             (isPaid
-                              ? 'border-emerald-400/60 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:text-emerald-400'
+                              ? 'border-good/40 bg-good-background text-good-foreground'
                               : 'border-border text-muted-foreground active:bg-accent')
                           }
                         >

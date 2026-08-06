@@ -163,7 +163,7 @@ export function CardForecastTab() {
                   <span className="shrink-0 text-[10px] text-muted-foreground">actual</span>
                 )}
                 {isPeak && (
-                  <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                  <span className="shrink-0 rounded-full bg-warning px-1.5 text-[10px] text-warning-foreground">
                     highest
                   </span>
                 )}

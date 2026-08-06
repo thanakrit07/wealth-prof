@@ -100,7 +100,7 @@ export function AuthScreen() {
       )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
+      {notice && <p className="text-sm text-good">{notice}</p>}
 
       <button type="submit" disabled={submitting} className={authPrimaryButtonClass}>
         {submitting

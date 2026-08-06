@@ -75,14 +75,14 @@ function BetweenUsSection() {
             {settlementRows.map((row) => (
               <div
                 key={`${row.memberA}-${row.memberB}`}
-                className="flex items-center justify-between gap-3 rounded-2xl border bg-amber-50 px-4 py-3 text-sm dark:bg-amber-950/30"
+                className="flex items-center justify-between gap-3 rounded-2xl border bg-warning px-4 py-3 text-sm"
               >
                 <span className="min-w-0">
                   {row.amount > 0 ? (
                     <span className="block">
                       <span className="font-medium">{nameOf(row.owesId)}</span> owes{' '}
                       <span className="font-medium">{nameOf(row.owedId)}</span>{' '}
-                      <span className="font-semibold text-amber-700 dark:text-amber-400">{formatBaht(row.amount)}</span>
+                      <span className="font-semibold text-warning-foreground">{formatBaht(row.amount)}</span>
                     </span>
                   ) : (
                     <span className="block font-medium">

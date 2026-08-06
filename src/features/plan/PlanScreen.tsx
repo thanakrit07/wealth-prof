@@ -52,7 +52,7 @@ function RecurringTab() {
         <dl className="mt-2 grid grid-cols-2 gap-2 text-center">
           <div>
             <dt className="text-xs text-muted-foreground">Income</dt>
-            <dd className="text-emerald-600 dark:text-emerald-400">{formatBaht(monthlyIncome)}</dd>
+            <dd className="text-good">{formatBaht(monthlyIncome)}</dd>
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Fixed costs</dt>
@@ -85,7 +85,7 @@ function RecurringTab() {
                     {next && ` · next ${next}`}
                   </span>
                 </button>
-                <span className={rule.kind === 'income' ? 'text-sm text-emerald-600 dark:text-emerald-400' : 'text-sm'}>
+                <span className={rule.kind === 'income' ? 'text-sm text-good' : 'text-sm'}>
                   {rule.kind === 'income' ? '+' : rule.kind === 'expense' ? '-' : ''}
                   {formatBaht(rule.amount)}
                 </span>

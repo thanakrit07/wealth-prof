@@ -119,7 +119,7 @@ export function WhoBearsField({ amount, members, selfId, value, onChange }: Prop
               ))}
               <div className="flex items-center justify-between border-t pt-1.5 text-xs text-muted-foreground">
                 <span>Total</span>
-                <span className={customMatches ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
+                <span className={customMatches ? 'text-good' : 'text-destructive'}>
                   {formatBaht(customTotal)}
                   {customMatches ? ' ✓' : ` of ${formatBaht(amount)}`}
                 </span>
