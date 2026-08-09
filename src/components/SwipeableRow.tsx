@@ -12,12 +12,15 @@ interface Props {
   children: ReactNode
 }
 
-// Swipe left on a list row to reveal Delete (DESIGN.md §7.3). Pointer events
-// only — no drag library — and the row stays fully tappable, so the gesture
-// is additive rather than the only way to reach the action.
+// Swipe left on a list row to reveal Delete (DESIGN.md §7.3) — the touch
+// route. Hovering or tab-focusing the row reveals the same button the same
+// way: previously it was aria-hidden + tabIndex={-1} until swiped open,
+// which only a touchscreen can do, leaving mouse and keyboard users with no
+// route to it at all.
 export function SwipeableRow({ onDelete, children }: Props) {
   const [offset, setOffset] = useState(0)
   const [dragging, setDragging] = useState(false)
+  const [revealed, setRevealed] = useState(false)
   const start = useRef<{ x: number; y: number; offset: number } | null>(null)
   const axis = useRef<'undecided' | 'horizontal' | 'vertical'>('undecided')
 
@@ -57,38 +60,53 @@ export function SwipeableRow({ onDelete, children }: Props) {
     setDragging(false)
   }
 
+  // Swiped past the halfway point (touch) or hovering/focused (mouse,
+  // keyboard) both mean the same thing: show the button.
+  const open = offset < -REVEAL_WIDTH / 2 || revealed
+  const x = dragging ? offset : open ? -REVEAL_WIDTH : 0
+
   return (
-    <div className="relative overflow-hidden">
-      <button
-        type="button"
-        onClick={() => {
-          setOffset(0)
-          onDelete()
-        }}
-        // Hidden from assistive tech while closed: tapping the row itself
-        // opens the editor, which has its own always-visible delete button.
-        aria-hidden={offset === 0}
-        tabIndex={offset === 0 ? -1 : 0}
-        className="absolute inset-y-0 right-0 flex items-center justify-center bg-destructive text-destructive-foreground"
-        style={{ width: REVEAL_WIDTH }}
-      >
-        <Trash2 className="size-4" />
-      </button>
+    <div className="relative overflow-hidden" onMouseEnter={() => setRevealed(true)} onMouseLeave={() => setRevealed(false)}>
+      {/* Content comes first in the DOM (not just visually) so Tab reaches
+          the row's own content before its secondary Delete action. */}
       <div
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         // Opaque, and matching the list it sits in, so the delete button
-        // behind it never shows through while sliding.
-        className="relative touch-pan-y bg-card"
+        // behind it never shows through while sliding. z-10: both this and
+        // the button are positioned elements, and the button now comes
+        // after this in the DOM (for Tab order) — without an explicit
+        // stacking order that would paint the button on top permanently,
+        // not just where the content has actually slid out of the way.
+        className="relative z-10 touch-pan-y bg-card"
         style={{
-          transform: `translateX(${offset}px)`,
+          transform: `translateX(${x}px)`,
           transition: dragging ? undefined : 'transform 150ms ease-out',
         }}
       >
         {children}
       </div>
+      <button
+        type="button"
+        onClick={() => {
+          setOffset(0)
+          setRevealed(false)
+          onDelete()
+        }}
+        onFocus={() => setRevealed(true)}
+        onBlur={() => setRevealed(false)}
+        aria-label="Delete"
+        // -outline-offset: the row's own overflow-hidden (needed to hide this
+        // button pre-reveal) also clips a normal outward-offset focus ring,
+        // since the button sits flush against the row's edges. Drawing the
+        // ring inset instead keeps it inside the clipped region.
+        className="absolute inset-y-0 right-0 flex items-center justify-center bg-destructive text-destructive-foreground focus-visible:outline-offset-[-2px]"
+        style={{ width: REVEAL_WIDTH }}
+      >
+        <Trash2 className="size-4" />
+      </button>
     </div>
   )
 }

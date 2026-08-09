@@ -1,24 +1,19 @@
-import { useState, type ComponentType, type ReactNode } from 'react'
-import { CalendarClock, ChevronLeft, ChevronRight, CloudOff, Plus, Receipt, Search, Settings as SettingsIcon, Wallet, X } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { ChevronLeft, ChevronRight, CloudOff, Plus, Search, Settings as SettingsIcon, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { MonthYearPicker } from '@/components/MonthYearPicker'
 import { cn } from '@/lib/utils'
 import { useOnline } from '@/hooks/useOnline'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { monthLabel, shiftMonth } from '@/lib/month'
 import type { PersonFilter } from '@/lib/filters'
+import { NavRail } from './NavRail'
+import { TABS } from './tabs'
+import type { Tab } from './tab-type'
 
-// D-0004: three tabs split by time horizon, not by the kind of object each
-// holds. Records is scoped to a month; Balances (now) and Upcoming (ahead)
-// never are, which is what decides whether the month/person header shows.
-export type Tab = 'records' | 'balances' | 'upcoming'
-
-const TABS: { key: Tab; label: string; icon: ComponentType<{ className?: string }> }[] = [
-  { key: 'records', label: 'Records', icon: Receipt },
-  { key: 'balances', label: 'Balances', icon: Wallet },
-  { key: 'upcoming', label: 'Upcoming', icon: CalendarClock },
-]
+export type { Tab } from './tab-type'
 
 interface Props {
   month: string
@@ -36,6 +31,9 @@ interface Props {
   // the billing cycle, not the calendar month — set while one is open to
   // swap the month nav for cycle nav; null/undefined for the normal month.
   cardCycle?: { label: string; onPrev: () => void; onNext: () => void } | null
+  // Desktop-only (≥ lg) third region. Only Records fills this today; every
+  // other tab renders with no aside. Wrap content in <SummaryColumn>.
+  aside?: ReactNode
 }
 
 export function AppShell({
@@ -51,9 +49,11 @@ export function AppShell({
   onSearchChange,
   children,
   cardCycle,
+  aside,
 }: Props) {
   const { members } = useHousehold()
   const online = useOnline()
+  const isDesktop = useIsDesktop()
   const [pickerOpen, setPickerOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
 
@@ -72,6 +72,106 @@ export function AppShell({
   function closeSearch() {
     setSearchOpen(false)
     onSearchChange('')
+  }
+
+  const monthYearPicker = pickerOpen && (
+    <MonthYearPicker month={month} onSelect={onMonthChange} onClose={() => setPickerOpen(false)} />
+  )
+
+  const personChips = showPersonFilter && (
+    <div className="flex flex-wrap gap-1.5">
+      {personOptions.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => onPersonChange(opt.value)}
+          className={cn(
+            'rounded-full border px-2.5 py-1 text-xs transition-colors',
+            person === opt.value
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'border-border text-muted-foreground hover:bg-accent',
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+
+  // Desktop (≥ lg): nav rail replaces the bottom nav + FAB, the sticky
+  // mobile header becomes a toolbar, and the whole shell is a fixed-height
+  // three-region row (rail · content · optional summary) that scrolls
+  // internally instead of the document scrolling — the bottom nav's `fixed`
+  // positioning and the FAB's magic-number clearance don't apply here.
+  if (isDesktop) {
+    return (
+      <div className="flex h-svh bg-background">
+        <NavRail tab={tab} onTabChange={onTabChange} onQuickAdd={onQuickAdd} onOpenSettings={onOpenSettings} />
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex flex-wrap items-center gap-3 border-b px-4 py-2.5">
+            {cardCycle ? (
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" onClick={cardCycle.onPrev} aria-label="Previous cycle">
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <span className="font-heading text-base font-semibold">{cardCycle.label}</span>
+                <Button variant="ghost" size="icon" onClick={cardCycle.onNext} aria-label="Next cycle">
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            ) : isRecords ? (
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Previous month">
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(true)}
+                  className="rounded-lg px-2 py-1 font-heading text-base font-semibold transition-colors hover:bg-accent"
+                >
+                  {monthLabel(month)}
+                </button>
+                <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, 1))} aria-label="Next month">
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            ) : (
+              <h1 className="font-heading text-base font-semibold">{tabLabel}</h1>
+            )}
+
+            {personChips}
+
+            <span className="flex-1" />
+
+            {isRecords && (
+              <label className="flex w-64 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm text-muted-foreground has-[input:focus-visible]:border-ring">
+                <Search className="size-4 shrink-0" />
+                <Input
+                  value={search}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search records…"
+                  aria-label="Search records"
+                  className="h-auto flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                />
+              </label>
+            )}
+
+            {!online && (
+              <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+                <CloudOff className="size-3.5" />
+                Offline
+              </span>
+            )}
+          </header>
+
+          {monthYearPicker}
+
+          <main className="flex-1 overflow-y-auto">{children}</main>
+        </div>
+
+        {aside}
+      </div>
+    )
   }
 
   return (
@@ -144,29 +244,10 @@ export function AppShell({
           </div>
         )}
 
-        {showPersonFilter && !searchOpen && (
-          <div className="flex flex-wrap justify-center gap-1.5">
-            {personOptions.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => onPersonChange(opt.value)}
-                className={cn(
-                  'rounded-full border px-2.5 py-1 text-xs transition-colors',
-                  person === opt.value
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border text-muted-foreground hover:bg-accent',
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        )}
+        {!searchOpen && personChips}
       </header>
 
-      {pickerOpen && (
-        <MonthYearPicker month={month} onSelect={onMonthChange} onClose={() => setPickerOpen(false)} />
-      )}
+      {monthYearPicker}
 
       {/* 9rem clears the FAB, which spans 5rem–8.5rem above the safe area:
           with less, the last line of a screen's content sits under it. */}
@@ -175,13 +256,13 @@ export function AppShell({
       <Button
         onClick={onQuickAdd}
         size="icon"
-        className="gradient-love fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-4 z-20 size-14 rounded-full border-0 text-white shadow-lg shadow-primary/30 transition-transform active:scale-95"
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-4 z-20 size-14 rounded-full border-0 bg-primary text-primary-foreground shadow-lg shadow-primary/30 transition-transform active:scale-95"
         aria-label="Quick add"
       >
         <Plus className="size-6" />
       </Button>
 
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
+      <nav aria-label="Sections" className="fixed inset-x-0 bottom-0 z-10 flex border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}

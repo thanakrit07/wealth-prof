@@ -1,0 +1,220 @@
+import { useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
+import { CategoryIcon } from '@/lib/categoryIcons'
+import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
+import type { Card } from '@/lib/cards'
+import type { Cycle } from '@/lib/finance/billingCycle'
+import { useHousehold } from '@/lib/HouseholdContext'
+import { borneAmount, matchesPersonFilter, sharesByTransaction, type PersonFilter } from '@/lib/filters'
+import { formatBaht } from '@/lib/format'
+import { monthRange } from '@/lib/month'
+import { useTransactionShares } from '@/lib/transactionShares'
+import { useTransactions } from '@/lib/transactions'
+import { cn } from '@/lib/utils'
+import { CardCycleSummary } from './CardCycleSummary'
+
+interface MainRow {
+  main: Category
+  total: number
+  subs: { category: Category; total: number }[]
+}
+
+interface Props {
+  month: string
+  person: PersonFilter
+  // A card's natural period is its billing cycle, not the calendar month
+  // (§7.3 v3.8) — when set, this overrides `month` and swaps the usual
+  // In/Out headline for CardCycleSummary's bill total.
+  card?: Card | null
+  cardCycle?: Cycle | null
+}
+
+// Records' month summary + category rollup (DESIGN §7.1 v3.5), extracted so
+// it can render inline above the ledger on mobile or in AppShell's desktop
+// summary column — same component, two hosts (App.tsx picks which one).
+// Self-contained: fetches and derives from `month`/`person`/`card`/`cardCycle`
+// on its own rather than taking the figures as props, so the two hosts never
+// need to be kept in sync by hand. The underlying queries share TanStack
+// Query's cache with TransactionsScreen's own (identical `queryKey`), so
+// this costs a recomputation, not a second network round-trip.
+export function RecordsSummary({ month, person, card, cardCycle }: Props) {
+  const { householdId, members } = useHousehold()
+  const range = useMemo(
+    () => (cardCycle ? { start: cardCycle.start, end: cardCycle.end } : monthRange(month)),
+    [month, cardCycle],
+  )
+  const { data: transactions } = useTransactions(householdId, range)
+  const { data: categories } = useCategories(householdId)
+  const { data: shares } = useTransactionShares(householdId)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [categoriesOpen, setCategoriesOpen] = useState(false)
+  const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
+
+  const sharesByTxn = useMemo(() => sharesByTransaction(shares), [shares])
+  const confirmed = useMemo(() => (transactions ?? []).filter((t) => t.confirmed), [transactions])
+  const cardTransactions = useMemo(
+    () => (card ? confirmed.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id) : []),
+    [card, confirmed],
+  )
+
+  const filtered = useMemo(
+    () => confirmed.filter((t) => matchesPersonFilter(t, sharesByTxn, person)),
+    [confirmed, sharesByTxn, person],
+  )
+
+  // D14: the headline is what this person Borne, not the face value of what
+  // they're merely listed on — full amounts here would double-count a
+  // shared row across both people's totals and break "A + B = All".
+  const borneOf = (t: (typeof filtered)[number]) => (person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person))
+  const income = filtered.filter((t) => t.kind === 'income').reduce((sum, t) => sum + borneOf(t), 0)
+  const expense = filtered.filter((t) => t.kind === 'expense').reduce((sum, t) => sum + borneOf(t), 0)
+
+  // Per-person Borne breakdown for the month, regardless of the active chip
+  // — useful to see "how much did each of us spend" no matter who's
+  // currently selected.
+  const personRows = useMemo(() => {
+    return members
+      .map((m) => {
+        const own = confirmed.filter((t) => matchesPersonFilter(t, sharesByTxn, m.id))
+        const income = own.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0)
+        const expense = own.filter((t) => t.kind === 'expense').reduce((s, t) => s + borneAmount(t, sharesByTxn, m.id), 0)
+        return { key: m.id, label: m.display_name, color: m.color, income, expense }
+      })
+      .filter((row) => row.income > 0 || row.expense > 0)
+  }, [confirmed, members, sharesByTxn])
+
+  // Expense by category, rolled up to effective mains (D10) and to Borne
+  // amounts under the active person filter.
+  const categoryRows = useMemo<MainRow[]>(() => {
+    const byId = new Map((categories ?? []).map((c) => [c.id, c]))
+    const mainTotals = new Map<string, number>()
+    const subTotals = new Map<string, Map<string, number>>()
+
+    for (const t of filtered) {
+      if (t.kind !== 'expense' || !t.category_id) continue
+      const category = byId.get(t.category_id)
+      if (!category) continue
+      const amount = person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person)
+      const mainId = effectiveMainId(category)
+      mainTotals.set(mainId, (mainTotals.get(mainId) ?? 0) + amount)
+      if (category.parent_id) {
+        const subs = subTotals.get(mainId) ?? new Map<string, number>()
+        subs.set(category.id, (subs.get(category.id) ?? 0) + amount)
+        subTotals.set(mainId, subs)
+      }
+    }
+
+    return [...mainTotals.entries()]
+      .map(([id, total]) => {
+        const main = byId.get(id)
+        if (!main) return null
+        const subs = [...(subTotals.get(id) ?? new Map<string, number>()).entries()]
+          .map(([subId, subTotal]) => ({ category: byId.get(subId), total: subTotal }))
+          .filter((row): row is { category: Category; total: number } => row.category != null)
+          .sort((a, b) => b.total - a.total)
+        return { main, total, subs }
+      })
+      .filter((row): row is MainRow => row != null)
+      .sort((a, b) => b.total - a.total)
+  }, [filtered, categories, person, sharesByTxn])
+  const maxCategoryTotal = categoryRows[0]?.total ?? 0
+  const categoryTotal = categoryRows.reduce((sum, row) => sum + row.total, 0)
+
+  if (card && cardCycle) {
+    return <CardCycleSummary card={card} cycle={cardCycle} cycleTransactions={cardTransactions} />
+  }
+
+  return (
+    <div className="space-y-3">
+      <button
+        type="button"
+        onClick={() => setSummaryOpen((open) => !open)}
+        className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
+      >
+        <span className="flex-1 truncate">
+          In <span className="text-good">{formatBaht(income)}</span> · Out{' '}
+          <span className="text-destructive">{formatBaht(expense)}</span>
+        </span>
+        <span className={cn('font-semibold', income - expense >= 0 ? 'text-good' : 'text-destructive')}>
+          {income - expense >= 0 ? '+' : ''}
+          {formatBaht(income - expense)}
+        </span>
+        <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', summaryOpen && 'rotate-180')} />
+      </button>
+
+      {summaryOpen && personRows.length > 0 && (
+        <div className="divide-y rounded-2xl border bg-card">
+          {personRows.map((row) => (
+            <div key={row.key} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
+              <span className="flex-1 truncate">{row.label}</span>
+              <span className="text-good">+{formatBaht(row.income)}</span>
+              <span className="text-destructive">-{formatBaht(row.expense)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {categoryRows.length > 0 && (
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            onClick={() => setCategoriesOpen((open) => !open)}
+            className="flex w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-left text-sm transition-colors hover:bg-accent/60 active:bg-accent/60"
+          >
+            <span className="flex-1 text-muted-foreground">Categories</span>
+            <span>{formatBaht(categoryTotal)}</span>
+            <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', categoriesOpen && 'rotate-180')} />
+          </button>
+
+          {categoriesOpen && (
+            <ul className="space-y-1.5">
+              {categoryRows.map(({ main, total, subs }) => {
+                const isExpanded = expandedMainId === main.id
+                return (
+                  <li key={main.id} className="space-y-1">
+                    <div className="space-y-1.5 rounded-xl border bg-card px-3 py-2">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <CategoryIcon icon={main.icon} color={main.color} className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="flex-1 truncate">{main.name}</span>
+                          <span>{formatBaht(total)}</span>
+                        </span>
+                        {subs.length > 0 && (
+                          <button
+                            onClick={() => setExpandedMainId(isExpanded ? null : main.id)}
+                            className="shrink-0 text-muted-foreground"
+                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${main.name}`}
+                          >
+                            <ChevronRight className={cn('size-4 transition-transform', isExpanded && 'rotate-90')} />
+                          </button>
+                        )}
+                      </div>
+                      <span className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <span
+                          className="block h-full rounded-full bg-primary/70"
+                          style={{ width: `${Math.max(4, (total / maxCategoryTotal) * 100)}%` }}
+                        />
+                      </span>
+                    </div>
+                    {isExpanded && subs.length > 0 && (
+                      <ul className="ml-4 space-y-1 border-l pl-3">
+                        {subs.map(({ category, total: subTotal }) => (
+                          <li key={category.id} className="flex items-center gap-2 px-2 py-1.5 text-left text-sm">
+                            <CategoryIcon icon={category.icon} color={category.color} className="size-3.5 shrink-0 text-muted-foreground" />
+                            <span className="flex-1 truncate">{category.name}</span>
+                            <span className="text-muted-foreground">{formatBaht(subTotal)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

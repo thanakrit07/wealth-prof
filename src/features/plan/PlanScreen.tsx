@@ -121,7 +121,7 @@ function RecurringTab() {
 // the FAB instead of two.
 export function PlanScreen() {
   return (
-    <div className="space-y-6 p-4">
+    <div className="mx-auto max-w-2xl space-y-6 p-4">
       <section className="space-y-2">
         <h2 className="font-heading text-sm font-medium text-muted-foreground">Card bills</h2>
         <CardForecastTab />

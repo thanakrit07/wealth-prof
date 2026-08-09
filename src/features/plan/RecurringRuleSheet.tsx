@@ -10,6 +10,7 @@ import { AmountField } from '@/components/AmountField'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
 import { DatePickerPanel } from '@/components/DatePickerPanel'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EntryPage } from '@/components/EntryPage'
 import { EntryRow } from '@/components/EntryRow'
 import { InstrumentPickerPanel } from '@/components/InstrumentPickerPanel'
@@ -20,7 +21,7 @@ import { useAmountEntry } from '@/hooks/useAmountEntry'
 import { useEntryPanel } from '@/hooks/useEntryPanel'
 import { useAccounts } from '@/lib/accounts'
 import { useCards } from '@/lib/cards'
-import { useCategories, type Category } from '@/lib/categories'
+import { categoryPath, useCategories, type Category } from '@/lib/categories'
 import type { EntryPrefill } from '@/lib/entryPrefill'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { toBuddhistYear } from '@/lib/month'
@@ -101,6 +102,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   const [autoPost, setAutoPost] = useState(rule?.auto_post ?? false)
   const [variableAmount, setVariableAmount] = useState(rule?.variable_amount ?? false)
   const [active, setActive] = useState(rule?.active ?? true)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
   const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
@@ -175,6 +177,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   }
 
   return (
+    <>
     <EntryPage
       title={rule ? 'Edit recurring rule' : 'New recurring rule'}
       onClose={onClose}
@@ -228,7 +231,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
         ) : (
           <div className="flex gap-2">
             {rule && (
-              <Button variant="outline" size="icon" onClick={handleDelete} aria-label="Delete rule">
+              <Button variant="outline" size="icon" onClick={() => setConfirmingDelete(true)} aria-label="Delete rule">
                 <Trash2 className="size-4" />
               </Button>
             )}
@@ -274,7 +277,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
             selectedCategory ? (
               <span className="flex items-center gap-1.5">
                 <CategoryIcon icon={selectedCategory.icon} color={selectedCategory.color} className="size-4" />
-                {selectedCategory.name}
+                {categoryPath(selectedCategory, categories ?? [])}
               </span>
             ) : (
               'Select category'
@@ -412,5 +415,14 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
         </p>
       )}
     </EntryPage>
+    {confirmingDelete && (
+      <ConfirmDialog
+        title="Delete this recurring rule?"
+        description="Occurrences already posted as transactions stay — only future ones stop being generated."
+        onConfirm={handleDelete}
+        onClose={() => setConfirmingDelete(false)}
+      />
+    )}
+    </>
   )
 }

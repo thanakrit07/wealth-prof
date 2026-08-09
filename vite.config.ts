@@ -19,11 +19,14 @@ export default defineConfig({
         description: 'Household finance tracker for two',
         lang: 'th',
         display: 'standalone',
-        orientation: 'portrait',
+        // Was 'portrait': the redesign adds a desktop layout (three regions
+        // on wide screens), so the installed app should be free to rotate /
+        // resize rather than lock to a phone orientation.
         start_url: '/',
         scope: '/',
-        theme_color: '#fbf2f0',
-        background_color: '#fbf2f0',
+        // ADR-0009 Emerald palette — matches --background / --primary in src/index.css.
+        theme_color: '#007b45',
+        background_color: '#f7faf8',
         icons: [
           { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
           { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' },

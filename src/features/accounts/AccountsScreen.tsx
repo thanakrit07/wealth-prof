@@ -209,7 +209,7 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   const headlineNetWorth = person === 'all' ? householdNetWorth : (netWorthRows.find((r) => r.member.id === person)?.amount ?? 0)
 
   return (
-    <div className="space-y-6 p-4">
+    <div className="mx-auto max-w-2xl space-y-6 p-4">
       <button
         type="button"
         onClick={() => setNetWorthOpen((o) => !o)}

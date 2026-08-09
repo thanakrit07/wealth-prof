@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, Check, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { ArrowRightLeft, Check, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { SwipeableRow } from '@/components/SwipeableRow'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { CategoryIcon } from '@/lib/categoryIcons'
-import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
+import { categoryPath, effectiveMainId, useCategories } from '@/lib/categories'
 import type { Card } from '@/lib/cards'
 import type { Cycle } from '@/lib/finance/billingCycle'
 import { useInstrumentNames } from '@/lib/instruments'
@@ -18,7 +20,7 @@ import { useInstallmentPayments, useSetPeriodPaid } from '@/lib/installments'
 import { useTransactionShares } from '@/lib/transactionShares'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
-import { CardCycleSummary } from './CardCycleSummary'
+import { RecordsSummary } from './RecordsSummary'
 import { ReviewStrip } from './ReviewStrip'
 import { TransactionSheet } from './TransactionSheet'
 
@@ -40,12 +42,6 @@ interface Props {
   card?: Card | null
   cardCycle?: Cycle | null
   onClearCard?: () => void
-}
-
-interface MainRow {
-  main: Category
-  total: number
-  subs: { category: Category; total: number }[]
 }
 
 export function TransactionsScreen({
@@ -71,10 +67,9 @@ export function TransactionsScreen({
   // Includes deleted accounts/cards, so a past transaction keeps naming
   // where the money actually moved (see useInstrumentNames).
   const { data: instrumentName } = useInstrumentNames(householdId)
+  const isDesktop = useIsDesktop()
   const [editing, setEditing] = useState<Transaction | null>(null)
-  const [summaryOpen, setSummaryOpen] = useState(false)
-  const [categoriesOpen, setCategoriesOpen] = useState(false)
-  const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<Transaction | null>(null)
   const remove = useDeleteTransaction(householdId)
   const { data: payments } = useInstallmentPayments(householdId)
   const setPeriodPaid = useSetPeriodPaid(householdId)
@@ -140,68 +135,12 @@ export function TransactionsScreen({
       matchesCard(t) &&
       matchesSearch(t),
   )
-  // CardCycleSummary wants every one of the card's rows in the cycle
-  // (charges and payments alike), not the person/category/search-narrowed
-  // list below — the bill total isn't a "your share" figure.
-  const cardTransactions = useMemo(() => (card ? confirmed.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id) : []), [card, confirmed])
-
-  // D14: the headline is what this person Borne, not the face value of what
-  // they're merely listed on — full amounts here would double-count a
-  // shared row across both people's totals and break "A + B = All".
+  // D14: day totals below are what this person Borne, not the face value of
+  // what they're merely listed on — full amounts would double-count a
+  // shared row across both people's totals and break "A + B = All". The
+  // month/category totals this fed also drive RecordsSummary now, which
+  // derives them itself from the same `month`/`person`/`card`/`cardCycle`.
   const borneOf = (t: Transaction) => (person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person))
-  const income = filtered.filter((t) => t.kind === 'income').reduce((sum, t) => sum + borneOf(t), 0)
-  const expense = filtered.filter((t) => t.kind === 'expense').reduce((sum, t) => sum + borneOf(t), 0)
-
-  // Per-person Borne breakdown for the month, regardless of the active chip
-  // — useful to see "how much did each of us spend" no matter who's
-  // currently selected.
-  const personRows = useMemo(() => {
-    return members
-      .map((m) => {
-        const own = confirmed.filter((t) => matchesPersonFilter(t, sharesByTxn, m.id))
-        const income = own.filter((t) => t.kind === 'income').reduce((s, t) => s + t.amount, 0)
-        const expense = own.filter((t) => t.kind === 'expense').reduce((s, t) => s + borneAmount(t, sharesByTxn, m.id), 0)
-        return { key: m.id, label: m.display_name, color: m.color, income, expense }
-      })
-      .filter((row) => row.income > 0 || row.expense > 0)
-  }, [confirmed, members, sharesByTxn])
-
-  // Expense by category, rolled up to effective mains (D10) and to Borne
-  // amounts under the active person filter.
-  const categoryRows = useMemo<MainRow[]>(() => {
-    const byId = new Map((categories ?? []).map((c) => [c.id, c]))
-    const mainTotals = new Map<string, number>()
-    const subTotals = new Map<string, Map<string, number>>()
-
-    for (const t of filtered) {
-      if (t.kind !== 'expense' || !t.category_id) continue
-      const category = byId.get(t.category_id)
-      if (!category) continue
-      const amount = person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person)
-      const mainId = effectiveMainId(category)
-      mainTotals.set(mainId, (mainTotals.get(mainId) ?? 0) + amount)
-      if (category.parent_id) {
-        const subs = subTotals.get(mainId) ?? new Map<string, number>()
-        subs.set(category.id, (subs.get(category.id) ?? 0) + amount)
-        subTotals.set(mainId, subs)
-      }
-    }
-
-    return [...mainTotals.entries()]
-      .map(([id, total]) => {
-        const main = byId.get(id)
-        if (!main) return null
-        const subs = [...(subTotals.get(id) ?? new Map<string, number>()).entries()]
-          .map(([subId, subTotal]) => ({ category: byId.get(subId), total: subTotal }))
-          .filter((row): row is { category: Category; total: number } => row.category != null)
-          .sort((a, b) => b.total - a.total)
-        return { main, total, subs }
-      })
-      .filter((row): row is MainRow => row != null)
-      .sort((a, b) => b.total - a.total)
-  }, [filtered, categories, person, sharesByTxn])
-  const maxCategoryTotal = categoryRows[0]?.total ?? 0
-  const categoryTotal = categoryRows.reduce((sum, row) => sum + row.total, 0)
 
   const groups = useMemo(() => {
     const map = new Map<string, Transaction[]>()
@@ -224,103 +163,13 @@ export function TransactionsScreen({
   const filterCategory = categoryId ? categoryById.get(categoryId) : null
 
   return (
-    <div className="space-y-3 p-4">
+    <div className="mx-auto max-w-2xl space-y-3 p-4">
       {/* One line (DESIGN §7.1 v3.5): the planning figures are the reason to
           open Records, but the daily habit is "jot → check the list", so the
-          summary can't push the first transaction off the screen. */}
-      {card && cardCycle ? (
-        <CardCycleSummary card={card} cycle={cardCycle} cycleTransactions={cardTransactions} />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setSummaryOpen((open) => !open)}
-          className="flex w-full items-center gap-2 rounded-2xl border bg-linear-to-br from-secondary/50 via-card to-accent/40 px-4 py-2.5 text-left text-sm shadow-sm"
-        >
-          <span className="flex-1 truncate">
-            In <span className="text-good">{formatBaht(income)}</span> · Out{' '}
-            {formatBaht(expense)}
-          </span>
-          <span className={cn('font-semibold', income - expense >= 0 ? 'text-good' : 'text-destructive')}>
-            {income - expense >= 0 ? '+' : ''}
-            {formatBaht(income - expense)}
-          </span>
-          <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', summaryOpen && 'rotate-180')} />
-        </button>
-      )}
-
-      {!card && summaryOpen && personRows.length > 0 && (
-        <div className="divide-y rounded-2xl border bg-card">
-          {personRows.map((row) => (
-            <div key={row.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
-              <span className="flex-1 truncate">{row.label}</span>
-              <span className="text-good">+{formatBaht(row.income)}</span>
-              <span className="text-muted-foreground">-{formatBaht(row.expense)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {categoryRows.length > 0 && (
-        <div className="space-y-1.5">
-          <button
-            type="button"
-            onClick={() => setCategoriesOpen((open) => !open)}
-            className="flex w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-left text-sm transition-colors active:bg-accent/60"
-          >
-            <span className="flex-1 text-muted-foreground">Categories</span>
-            <span>{formatBaht(categoryTotal)}</span>
-            <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', categoriesOpen && 'rotate-180')} />
-          </button>
-
-          {categoriesOpen && (
-            <ul className="space-y-1.5">
-              {categoryRows.map(({ main, total, subs }) => {
-                const isExpanded = expandedMainId === main.id
-                return (
-                  <li key={main.id} className="space-y-1">
-                    <div className="space-y-1.5 rounded-xl border bg-card px-3 py-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="flex min-w-0 flex-1 items-center gap-2">
-                          <CategoryIcon icon={main.icon} color={main.color} className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="flex-1 truncate">{main.name}</span>
-                          <span>{formatBaht(total)}</span>
-                        </span>
-                        {subs.length > 0 && (
-                          <button
-                            onClick={() => setExpandedMainId(isExpanded ? null : main.id)}
-                            className="shrink-0 text-muted-foreground"
-                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${main.name}`}
-                          >
-                            <ChevronRight className={cn('size-4 transition-transform', isExpanded && 'rotate-90')} />
-                          </button>
-                        )}
-                      </div>
-                      <span className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                        <span
-                          className="block h-full rounded-full bg-primary/70"
-                          style={{ width: `${Math.max(4, (total / maxCategoryTotal) * 100)}%` }}
-                        />
-                      </span>
-                    </div>
-                    {isExpanded && subs.length > 0 && (
-                      <ul className="ml-4 space-y-1 border-l pl-3">
-                        {subs.map(({ category, total: subTotal }) => (
-                          <li key={category.id} className="flex items-center gap-2 px-2 py-1.5 text-left text-sm">
-                            <CategoryIcon icon={category.icon} color={category.color} className="size-3.5 shrink-0 text-muted-foreground" />
-                            <span className="flex-1 truncate">{category.name}</span>
-                            <span className="text-muted-foreground">{formatBaht(subTotal)}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
-      )}
+          summary can't push the first transaction off the screen. On
+          desktop this same component renders in AppShell's summary column
+          instead (App.tsx), so it isn't rendered twice. */}
+      {!isDesktop && <RecordsSummary month={month} person={person} card={card} cardCycle={cardCycle} />}
 
       <ReviewStrip onEdit={setEditing} />
       {filterCategory && (
@@ -370,7 +219,7 @@ export function TransactionsScreen({
                   {dayIncome > 0 && (
                     <span className="text-good">{formatBaht(dayIncome)}</span>
                   )}
-                  {dayExpense > 0 && <span className="text-muted-foreground">{formatBaht(dayExpense)}</span>}
+                  {dayExpense > 0 && <span className="text-destructive">{formatBaht(dayExpense)}</span>}
                 </span>
               </div>
 
@@ -378,12 +227,13 @@ export function TransactionsScreen({
                 {items.map((t) => {
                   const category = t.category_id ? categoryById.get(t.category_id) : null
                   const owner = t.owner_id ? memberById.get(t.owner_id) : null
+                  const catPath = category ? categoryPath(category, categories ?? []) : null
                   const title =
                     t.kind === 'transfer'
                       ? `${instrumentLabel(t, 'from')} → ${instrumentLabel(t, 'to')}`
-                      : t.note || category?.name || t.kind
+                      : t.note || catPath || t.kind
                   // Category only repeats below when it isn't already the title.
-                  const details = [category?.name === title ? null : category?.name, instrumentLabel(t, 'from'), owner?.display_name]
+                  const details = [catPath === title ? null : catPath, instrumentLabel(t, 'from'), owner?.display_name]
                     .filter(Boolean)
                     .join(' · ')
                   // Under a specific person's filter, a shared row's full
@@ -396,7 +246,7 @@ export function TransactionsScreen({
                   const periodPaid = periodKey != null && paidKeys.has(periodKey)
                   return (
                     <li key={t.id} className="border-t">
-                      <SwipeableRow onDelete={() => handleDelete(t)}>
+                      <SwipeableRow onDelete={() => setConfirmingDelete(t)}>
                         <div className="flex items-center">
                           <button
                             onClick={() => setEditing(t)}
@@ -409,7 +259,10 @@ export function TransactionsScreen({
                             )}
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center gap-1.5">
-                                <span className={cn('truncate text-sm', periodPaid && 'text-muted-foreground')}>{title}</span>
+                                <span className={cn('truncate text-sm', periodPaid && 'text-muted-foreground')}>
+                                  {title}
+                                  {t.description && <span className="text-muted-foreground"> — {t.description}</span>}
+                                </span>
                                 {!t.confirmed && (
                                   <span className="shrink-0 rounded-full bg-warning px-1.5 text-[10px] text-warning-foreground">
                                     Pending
@@ -428,9 +281,9 @@ export function TransactionsScreen({
                                 'shrink-0 text-sm tabular-nums',
                                 t.kind === 'income'
                                   ? 'text-good'
-                                  : t.kind === 'transfer'
-                                    ? 'text-muted-foreground'
-                                    : 'text-foreground',
+                                  : t.kind === 'expense'
+                                    ? 'text-destructive'
+                                    : 'text-muted-foreground',
                               )}
                             >
                               {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
@@ -483,6 +336,14 @@ export function TransactionsScreen({
       </div>
 
       {editing && <TransactionSheet open onOpenChange={(open) => !open && setEditing(null)} transaction={editing} />}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this transaction?"
+          description="Removes it from every total. You'll have a few seconds to undo right after."
+          onConfirm={() => handleDelete(confirmingDelete)}
+          onClose={() => setConfirmingDelete(null)}
+        />
+      )}
     </div>
   )
 }

@@ -64,7 +64,7 @@ export function CategoriesScreen() {
   if (openMain) {
     const subs = subsOf(openMain.id)
     return (
-      <div className="space-y-4 p-4">
+      <div className="mx-auto max-w-2xl space-y-4 p-4">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="icon" className="size-8 -ml-2" onClick={() => setOpenMainId(null)} aria-label="Back">
             <ChevronLeft className="size-4" />
@@ -84,7 +84,7 @@ export function CategoriesScreen() {
           <SortableContext items={subs.map((c) => c.id)} strategy={verticalListSortingStrategy}>
             <ul className="space-y-1.5">
               {subs.map((sub) => (
-                <CategoryRow key={sub.id} category={sub} onEdit={() => setEditing(sub)} onDelete={() => setConfirmingDelete(sub)} />
+                <CategoryRow key={sub.id} category={sub} showIcon={false} onEdit={() => setEditing(sub)} onDelete={() => setConfirmingDelete(sub)} />
               ))}
             </ul>
           </SortableContext>
@@ -178,6 +178,7 @@ function CategoryRow({
   category,
   title,
   subtitle,
+  showIcon = true,
   onOpen,
   onEdit,
   onDelete,
@@ -185,6 +186,7 @@ function CategoryRow({
   category: Category
   title?: string
   subtitle?: string
+  showIcon?: boolean
   onOpen?: () => void
   onEdit: () => void
   onDelete: () => void
@@ -205,7 +207,7 @@ function CategoryRow({
             disabled={!onOpen}
             className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default"
           >
-            <CategoryIcon icon={category.icon} color={category.color} className="size-4 shrink-0 text-muted-foreground" />
+            {showIcon && <CategoryIcon icon={category.icon} color={category.color} className="size-4 shrink-0 text-muted-foreground" />}
             <span className="min-w-0 flex-1">
               <span className="block truncate">{title ?? category.name}</span>
               {subtitle && <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>}
@@ -389,14 +391,15 @@ function CategoryDialog({
   onClose: () => void
 }) {
   const { householdId } = useHousehold()
+  const isSub = category ? category.parent_id !== null : parentId !== null
   const [name, setName] = useState(category?.name ?? '')
-  const [icon, setIcon] = useState(category?.icon ?? ICON_KEYS[0])
+  // Subs don't get an icon (declutters the grid a sub-category count deep,
+  // and the icon picker along with it — nothing left to pick for one).
+  const [icon, setIcon] = useState(category?.icon ?? (isSub ? null : ICON_KEYS[0]))
   const [color, setColor] = useState<string | null>(category?.color ?? null)
   const [archived, setArchived] = useState(category?.archived ?? false)
   const create = useCreateCategory(householdId)
   const update = useUpdateCategory(householdId)
-
-  const isSub = category ? category.parent_id !== null : parentId !== null
 
   async function handleSave() {
     if (category) {
@@ -420,7 +423,7 @@ function CategoryDialog({
             <Label htmlFor="category-name">Name</Label>
             <Input id="category-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
-          <IconPicker value={icon} color={color} onChange={setIcon} onColorChange={setColor} />
+          {!isSub && <IconPicker value={icon ?? ICON_KEYS[0]} color={color} onChange={setIcon} onColorChange={setColor} />}
           {category && (
             <div className="flex items-center justify-between">
               <div>
