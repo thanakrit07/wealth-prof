@@ -1,7 +1,8 @@
-import { useRef, useState, type PointerEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useIsDesktop } from '@/hooks/useIsDesktop'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -25,7 +26,7 @@ const EDGE_WIDTH = 24
 const DIRECTION_LOCK = 8
 const DISMISS_FRACTION = 0.3
 
-function useEdgeSwipeToDismiss(onDismiss: () => void) {
+function useEdgeSwipeToDismiss(onDismiss: () => void, enabled: boolean) {
   const [offset, setOffset] = useState(0)
   const [dragging, setDragging] = useState(false)
   const start = useRef<{ x: number; y: number } | null>(null)
@@ -33,6 +34,7 @@ function useEdgeSwipeToDismiss(onDismiss: () => void) {
   const width = useRef(typeof window === 'undefined' ? 0 : window.innerWidth)
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
+    if (!enabled) return
     if (e.pointerType === 'mouse' && e.button !== 0) return
     if (e.clientX > EDGE_WIDTH) return
     start.current = { x: e.clientX, y: e.clientY }
@@ -69,16 +71,18 @@ function useEdgeSwipeToDismiss(onDismiss: () => void) {
 
   return {
     offset,
-    handlers: {
-      onPointerDown,
-      onPointerMove,
-      onPointerUp,
-      onPointerCancel: onPointerUp,
-      style: {
-        transform: offset ? `translateX(${offset}px)` : undefined,
-        transition: dragging ? undefined : 'transform 200ms ease-out',
-      },
-    },
+    handlers: enabled
+      ? {
+          onPointerDown,
+          onPointerMove,
+          onPointerUp,
+          onPointerCancel: onPointerUp,
+          style: {
+            transform: offset ? `translateX(${offset}px)` : undefined,
+            transition: dragging ? undefined : 'transform 200ms ease-out',
+          },
+        }
+      : {},
   }
 }
 
@@ -100,8 +104,54 @@ function useEdgeSwipeToDismiss(onDismiss: () => void) {
 // is what "the header doesn't stay on top" actually was. Portalling out
 // from under that ancestor is the standard fix, and it means no call site
 // has to think about where it happens to sit in the tree.
+//
+// Desktop (≥ lg): a full-bleed edge-swipe-dismissable page makes no sense on
+// a mouse-driven wide screen, so this becomes a centred dialog instead — the
+// bottom picker panel becomes a side column next to the form rather than a
+// sheet under it, using the same `panelOpen` boolean every call site already
+// threads through; no new state needed.
 export function EntryPage({ title, onClose, children, footer, panelOpen }: Props) {
-  const { offset, handlers } = useEdgeSwipeToDismiss(onClose)
+  const isDesktop = useIsDesktop()
+  const { offset, handlers } = useEdgeSwipeToDismiss(onClose, !isDesktop)
+
+  useEffect(() => {
+    if (!isDesktop) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isDesktop, onClose])
+
+  if (isDesktop) {
+    return createPortal(
+      <div
+        className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-6"
+        onClick={onClose}
+      >
+        <div
+          className="flex max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-2xl border bg-background shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex min-w-0 flex-1 flex-col">
+            <header className="flex items-center gap-2 border-b px-4 py-3">
+              <h1 className="min-w-0 flex-1 truncate font-heading text-base font-semibold">{title}</h1>
+              <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+                <X className="size-4" />
+              </Button>
+            </header>
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">{children}</div>
+            {!panelOpen && <div className="border-t px-4 py-3">{footer}</div>}
+          </div>
+
+          {panelOpen && (
+            <div className="w-72 shrink-0 overflow-y-auto border-l bg-popover p-3">{footer}</div>
+          )}
+        </div>
+      </div>,
+      document.body,
+    )
+  }
 
   return createPortal(
     <div className="fixed inset-0 z-30 touch-pan-y" {...handlers}>

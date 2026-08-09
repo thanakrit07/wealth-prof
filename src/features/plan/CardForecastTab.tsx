@@ -124,7 +124,9 @@ export function CardForecastTab() {
           {monthLabel(months[0])} – {monthLabel(months[months.length - 1])}
         </p>
         <Select value={view} onValueChange={setView}>
-          <SelectTrigger className="w-32 shrink-0" aria-label="Period shown"><SelectValue /></SelectTrigger>
+          {/* No width override: SelectTrigger already defaults to w-fit, and a
+              hardcoded w-32 was clipping longer Buddhist-era year labels. */}
+          <SelectTrigger className="shrink-0" aria-label="Period shown"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="recent">Recent</SelectItem>
             {years.map((y) => (
@@ -197,8 +199,10 @@ export function CardForecastTab() {
       </ul>
 
       {/* pr-20 keeps the text clear of the floating FAB: this tab's content is
-          often shorter than the viewport, so it can't just be scrolled out. */}
-      <p className="pr-20 text-xs text-muted-foreground">
+          often shorter than the viewport, so it can't just be scrolled out.
+          Desktop has no floating FAB (AppShell's rail has "New record"
+          instead), so the clearance isn't needed there. */}
+      <p className="pr-20 text-xs text-muted-foreground lg:pr-0">
         Past months show what was actually charged. Future months count committed charges only — installment
         periods and recurring rules — so day-to-day spending that hasn't happened yet is not included.
       </p>

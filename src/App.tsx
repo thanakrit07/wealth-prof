@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import type { Tab } from '@/components/layout/AppShell'
+import { SummaryColumn } from '@/components/layout/SummaryColumn'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { FullScreenPage } from '@/components/FullScreenPage'
 import { ErrorScreen } from '@/components/ErrorScreen'
@@ -9,6 +10,7 @@ import { HouseholdSetup } from './components/HouseholdSetup'
 import { ResetPasswordScreen } from './components/ResetPasswordScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
+import { RecordsSummary } from '@/features/transactions/RecordsSummary'
 import { AccountsScreen } from '@/features/accounts/AccountsScreen'
 import { InstallmentMaterialiser } from '@/features/installments/InstallmentMaterialiser'
 import { PlanScreen } from '@/features/plan/PlanScreen'
@@ -18,6 +20,7 @@ import { useCards } from './lib/cards'
 import { addDays, cycleOf } from './lib/finance/billingCycle'
 import { fetchOwnMember, type HouseholdMember } from './lib/household'
 import { HouseholdProvider } from './lib/HouseholdContext'
+import { useIsDesktop } from './hooks/useIsDesktop'
 import { useUrlState } from './hooks/useUrlState'
 import { currentMonthKey, dayMonthLabel } from './lib/month'
 import type { PersonFilter } from './lib/filters'
@@ -28,6 +31,7 @@ function todayIso(): string {
 }
 
 function SignedInApp({ self }: { self: HouseholdMember }) {
+  const isDesktop = useIsDesktop()
   const [month, setMonth] = useUrlState('month', currentMonthKey())
   const [person, setPerson] = useUrlState('person', 'all')
   // Records is the landing tab (DESIGN.md §7.1 v3.5): the daily habit is
@@ -109,6 +113,13 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
                 onNext: () => setCardAnchor(addDays(activeCycle.end, 1)),
               }
             : null
+        }
+        aside={
+          isDesktop && resolvedTab === 'records' ? (
+            <SummaryColumn>
+              <RecordsSummary month={month} person={person as PersonFilter} card={activeCard} cardCycle={activeCycle} />
+            </SummaryColumn>
+          ) : undefined
         }
       >
         {/* Inside the shell, so a screen that throws leaves the bottom nav

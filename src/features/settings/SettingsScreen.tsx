@@ -58,7 +58,7 @@ export function SettingsScreen() {
   }
 
   return (
-    <div className="space-y-6 p-4">
+    <div className="mx-auto max-w-2xl space-y-6 p-4">
       <section>
         <h2 className="text-sm font-medium text-muted-foreground">Household</h2>
         <ul className="mt-2 space-y-1">

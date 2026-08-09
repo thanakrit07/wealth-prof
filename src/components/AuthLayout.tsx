@@ -38,7 +38,7 @@ export const authInputClass =
   'w-full rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:ring-2 focus:ring-ring/50'
 
 export const authPrimaryButtonClass =
-  'gradient-love w-full rounded-xl px-3 py-2 text-sm font-medium text-white shadow-md shadow-primary/25 disabled:opacity-50'
+  'w-full rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-md shadow-primary/25 disabled:opacity-50'
 
 export const authLinkButtonClass =
   'w-full text-center text-sm text-muted-foreground underline-offset-2 hover:underline'

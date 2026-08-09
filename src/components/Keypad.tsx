@@ -49,7 +49,7 @@ export function Keypad({ onKey, onEquals, onDone }: Props) {
         <button
           type="button"
           onClick={onEquals}
-          className="gradient-love col-span-2 flex h-12 items-center justify-center rounded-lg text-lg font-semibold text-white transition-opacity active:opacity-90"
+          className="col-span-2 flex h-12 items-center justify-center rounded-lg bg-primary text-lg font-semibold text-primary-foreground transition-opacity active:opacity-90"
         >
           =
         </button>

@@ -64,7 +64,7 @@ export function CategoriesScreen() {
   if (openMain) {
     const subs = subsOf(openMain.id)
     return (
-      <div className="space-y-4 p-4">
+      <div className="mx-auto max-w-2xl space-y-4 p-4">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="icon" className="size-8 -ml-2" onClick={() => setOpenMainId(null)} aria-label="Back">
             <ChevronLeft className="size-4" />
