@@ -3,6 +3,8 @@
 // separate from billingCycle.ts because the two figures deliberately use
 // different time windows — see the account/card asymmetry below.
 
+import { addDays } from './billingCycle.ts'
+
 export interface AccountLike {
   id: string
   owner_id: string | null
@@ -31,6 +33,69 @@ export interface DebtLike {
   owes_member_id: string
   owed_member_id: string
   amount: number
+}
+
+// ADR-0013: an anchor is a log, not a column. `AccountLike.anchor_balance` /
+// `anchor_date` are the *newest* anchor's baseline — callers (useAccounts)
+// pick it with `newestAnchor` before handing the account to this function,
+// so this function's own logic is unchanged from when those two fields were
+// a raw column.
+export interface AccountAnchorLike {
+  account_id: string
+  reading_balance: number
+  reading_date: string // yyyy-MM-dd — what the household asserted
+  baseline_balance: number
+  baseline_date: string // yyyy-MM-dd — what accountBalance actually consumes
+  created_at: string // ISO timestamp — the only field guaranteed to differ
+  // between two reconciles made on the same day, where baseline_date and
+  // reading_date are both derived from "today" and so land identical.
+}
+
+// The anchor `accountBalance` should start from: the one with the latest
+// baseline_date. Reconciling twice in one day gives baseline_date AND
+// reading_date the same value on both rows (both derive from "today"), so
+// those two ties resolve nothing — created_at is the final, always-unique
+// tiebreaker.
+export function newestAnchor(anchors: AccountAnchorLike[], accountId: string): AccountAnchorLike | null {
+  let newest: AccountAnchorLike | null = null
+  for (const a of anchors) {
+    if (a.account_id !== accountId) continue
+    if (
+      !newest ||
+      a.baseline_date > newest.baseline_date ||
+      (a.baseline_date === newest.baseline_date && a.reading_date > newest.reading_date) ||
+      (a.baseline_date === newest.baseline_date && a.reading_date === newest.reading_date && a.created_at > newest.created_at)
+    ) {
+      newest = a
+    }
+  }
+  return newest
+}
+
+// ADR-0013: a Transaction carries a date but no time, so a reading taken
+// partway through today can't be compared against "everything up to today"
+// without either swallowing what gets recorded later today or double
+// counting what was recorded earlier today. Storing the close of the day
+// *before* the reading sidesteps the question instead of picking a wrong
+// answer to it: every one of today's transactions — confirmed before the
+// reconcile or after it — applies on top of this baseline exactly once.
+export function anchorBaseline(
+  accountId: string,
+  readingBalance: number,
+  readingDate: string,
+  transactions: TransactionLike[],
+): { baselineBalance: number; baselineDate: string } {
+  let todaysNet = 0
+  for (const t of transactions) {
+    if (!t.confirmed || t.date !== readingDate) continue
+    if (t.kind === 'income' && t.from_account_id === accountId) todaysNet += t.amount
+    else if (t.kind === 'expense' && t.from_account_id === accountId) todaysNet -= t.amount
+    else if (t.kind === 'transfer') {
+      if (t.to_account_id === accountId) todaysNet += t.amount
+      if (t.from_account_id === accountId) todaysNet -= t.amount
+    }
+  }
+  return { baselineBalance: readingBalance - todaysNet, baselineDate: addDays(readingDate, -1) }
 }
 
 // §6.3: anchor + everything since, confirmed rows only. Bounded by `today`

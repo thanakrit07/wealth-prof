@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { accountBalance, cardOutstanding, commonPotBalance, creditAvailable, memberNetWorth } from './balances'
+import {
+  accountBalance,
+  anchorBaseline,
+  cardOutstanding,
+  commonPotBalance,
+  creditAvailable,
+  memberNetWorth,
+  newestAnchor,
+} from './balances'
 
 const A = 'member-a'
 const B = 'member-b'
@@ -74,6 +82,95 @@ describe('accountBalance', () => {
     const acc = account()
     const txns = [txn({ kind: 'expense', amount: 500, from_account_id: 'acc-1', date: '2026-03-01' })]
     expect(accountBalance(acc, txns, '2026-01-31')).toBe(1000)
+  })
+})
+
+describe('newestAnchor', () => {
+  const anchor = (over: Partial<Parameters<typeof newestAnchor>[0][number]> = {}) => ({
+    account_id: 'acc-1',
+    reading_balance: 1000,
+    reading_date: '2026-01-01',
+    baseline_balance: 1000,
+    baseline_date: '2026-01-01',
+    created_at: '2026-01-01T00:00:00Z',
+    ...over,
+  })
+
+  it('picks the anchor with the latest baseline_date', () => {
+    const anchors = [anchor({ baseline_date: '2026-01-05' }), anchor({ baseline_date: '2026-02-10' }), anchor({ baseline_date: '2026-01-20' })]
+    expect(newestAnchor(anchors, 'acc-1')?.baseline_date).toBe('2026-02-10')
+  })
+
+  it('ignores anchors for other accounts', () => {
+    const anchors = [anchor({ account_id: 'acc-2', baseline_date: '2026-06-01' }), anchor({ baseline_date: '2026-01-01' })]
+    expect(newestAnchor(anchors, 'acc-1')?.baseline_date).toBe('2026-01-01')
+  })
+
+  it('returns null when the account has no anchor', () => {
+    expect(newestAnchor([anchor({ account_id: 'acc-2' })], 'acc-1')).toBeNull()
+  })
+
+  it('breaks a baseline_date tie on reading_date', () => {
+    const anchors = [
+      anchor({ baseline_date: '2026-01-01', reading_date: '2026-01-01' }),
+      anchor({ baseline_date: '2026-01-01', reading_date: '2026-01-03' }),
+    ]
+    expect(newestAnchor(anchors, 'acc-1')?.reading_date).toBe('2026-01-03')
+  })
+
+  it('breaks a same-day double reconcile on created_at — baseline_date and reading_date both derive from "today" and land identical on both rows', () => {
+    const anchors = [
+      anchor({ baseline_date: '2026-08-09', reading_date: '2026-08-10', baseline_balance: 19500, created_at: '2026-08-10T08:00:00Z' }),
+      anchor({ baseline_date: '2026-08-09', reading_date: '2026-08-10', baseline_balance: 12345, created_at: '2026-08-10T09:00:00Z' }),
+    ]
+    // Order in the array must not matter — the second reconcile wins either way.
+    expect(newestAnchor(anchors, 'acc-1')?.baseline_balance).toBe(12345)
+    expect(newestAnchor([...anchors].reverse(), 'acc-1')?.baseline_balance).toBe(12345)
+  })
+})
+
+describe('anchorBaseline', () => {
+  it('stores the close of the day before the reading when nothing else happened today', () => {
+    const result = anchorBaseline('acc-1', 5000, '2026-01-10', [])
+    expect(result).toEqual({ baselineBalance: 5000, baselineDate: '2026-01-09' })
+  })
+
+  it('backs out a transaction recorded earlier today, so it is not double-counted when accountBalance re-applies it', () => {
+    // Coffee at 9am, reconciled at 3pm for ฿5,000 (which already reflects the coffee).
+    const txns = [txn({ kind: 'expense', amount: 65, from_account_id: 'acc-1', date: '2026-01-10' })]
+    const result = anchorBaseline('acc-1', 5000, '2026-01-10', txns)
+    expect(result).toEqual({ baselineBalance: 5065, baselineDate: '2026-01-09' })
+  })
+
+  it('is unaffected by a transaction recorded later today', () => {
+    // Reconciled at 3pm; dinner at 6pm is entered afterwards, dated today.
+    // accountBalance re-applies it on top of this baseline, so it must not
+    // already be backed out here.
+    const result = anchorBaseline('acc-1', 5000, '2026-01-10', [])
+    expect(result.baselineBalance).toBe(5000)
+  })
+
+  it('ignores rows for other accounts and other dates', () => {
+    const txns = [
+      txn({ kind: 'expense', amount: 999, from_account_id: 'other-acc', date: '2026-01-10' }),
+      txn({ kind: 'expense', amount: 999, from_account_id: 'acc-1', date: '2026-01-09' }),
+    ]
+    expect(anchorBaseline('acc-1', 5000, '2026-01-10', txns).baselineBalance).toBe(5000)
+  })
+
+  it('ignores unconfirmed rows', () => {
+    const txns = [txn({ kind: 'expense', amount: 65, from_account_id: 'acc-1', date: '2026-01-10', confirmed: false })]
+    expect(anchorBaseline('acc-1', 5000, '2026-01-10', txns).baselineBalance).toBe(5000)
+  })
+
+  it('feeds accountBalance a baseline that reproduces the reading for that day', () => {
+    // The scenario ADR-0013 exists for: same-day transactions before AND
+    // after the reconcile both apply exactly once.
+    const before = txn({ kind: 'expense', amount: 65, from_account_id: 'acc-1', date: '2026-01-10' }) // 9am, before reconcile
+    const after = txn({ kind: 'expense', amount: 200, from_account_id: 'acc-1', date: '2026-01-10' }) // 6pm, after reconcile
+    const { baselineBalance, baselineDate } = anchorBaseline('acc-1', 5000, '2026-01-10', [before])
+    const acc = account({ anchor_balance: baselineBalance, anchor_date: baselineDate })
+    expect(accountBalance(acc, [before, after], '2026-01-10')).toBe(5000 - 200)
   })
 })
 

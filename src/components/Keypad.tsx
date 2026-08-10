@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Delete } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -18,6 +19,37 @@ interface Props {
 // system numeric keyboard never opens for amounts, which is what was
 // shrinking the viewport and shoving the whole sheet up on iOS.
 export function Keypad({ onKey, onEquals, onDone }: Props) {
+  // A physical keyboard has no viewport-shove problem — D9's constraint is
+  // about the *on-screen* keyboard an <input> would summon, and AmountField
+  // is a <button>, so nothing here ever focuses one. Safe to also drive this
+  // from key presses: mounted only while the amount panel is open (every
+  // caller swaps it in for exactly that), and every free-text field in these
+  // sheets closes the panel on focus, so this can never fire while the user
+  // is typing into Note or Details.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (/^[0-9]$/.test(e.key)) {
+        onKey(e.key)
+      } else if (e.key === '.' || e.key === '+' || e.key === '-') {
+        onKey(e.key)
+      } else if (e.key === '*') {
+        onKey('×')
+      } else if (e.key === '/') {
+        onKey('÷')
+      } else if (e.key === 'Backspace') {
+        onKey('⌫')
+      } else if (e.key === 'Enter') {
+        onEquals()
+      } else {
+        return
+      }
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onKey, onEquals])
+
   return (
     <div className="space-y-1.5">
       <div className="grid grid-cols-4 gap-1.5">

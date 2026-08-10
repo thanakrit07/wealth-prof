@@ -111,7 +111,7 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
   const [note, setNote] = useState(installment?.note ?? '')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
-  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === 'expense')
+  const relevantCategories = (categories ?? []).filter((c) => !c.archived && !c.system && c.kind === 'expense')
   const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
 
   function instrumentLabel(i: Instrument): string {

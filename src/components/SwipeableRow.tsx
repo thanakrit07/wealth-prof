@@ -80,7 +80,7 @@ export function SwipeableRow({ onDelete, children }: Props) {
         // after this in the DOM (for Tab order) — without an explicit
         // stacking order that would paint the button on top permanently,
         // not just where the content has actually slid out of the way.
-        className="relative z-10 touch-pan-y bg-card"
+        className="relative z-9 touch-pan-y bg-card"
         style={{
           transform: `translateX(${x}px)`,
           transition: dragging ? undefined : 'transform 150ms ease-out',

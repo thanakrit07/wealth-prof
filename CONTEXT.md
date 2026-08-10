@@ -84,8 +84,12 @@ _Avoid_: created, materialised, generated
 
 **Projected**:
 Calculated for display only and never stored — how future Recurring Occurrences
-reach screens that look ahead.
-_Avoid_: forecast, predicted, virtual
+reach screens that look ahead. Posted and Projected are also the two degrees of
+certainty a forward-looking screen has to keep apart: a future Installment
+Period is Posted and cannot be escaped, while a Recurring Occurrence is an
+expectation that can be cancelled tomorrow and rarely costs the same twice.
+_Avoid_: forecast, predicted, virtual, **committed** (an Installment Plan is
+committed; a Recurring Rule is defined by having no committed end)
 
 ### Sharing and debt
 
@@ -131,6 +135,29 @@ the two Members' Instruments, so the repayment appears in the ledger like any
 other movement of money.
 _Avoid_: payback, reconciliation, clearing
 
+### Account balances
+
+**Anchor**:
+A balance a Member has confirmed against the real world on a given date. An
+account's current figure is its newest Anchor plus every Transaction since, so
+an Anchor is the only thing an account's number rests on that the ledger did
+not produce.
+_Avoid_: opening balance, starting balance, snapshot
+
+**Reconcile**:
+To make an Instrument's figure agree with what the outside world says, by
+entering the real number. On an account this records a new Anchor; on a credit
+card it records a signed difference against one Billing Cycle. Anchors
+accumulate rather than replace one another, so what the app expected and what
+was really there both survive, and the gap between them can be read back.
+_Avoid_: sync, correct, adjust, true-up
+
+**Drift**:
+The gap an Anchor reveals between the balance the ledger computed and the one
+that was really there. It is the symptom of a Transaction nobody recorded, so
+it is worth showing rather than absorbing.
+_Avoid_: discrepancy, error, variance
+
 ### Credit cards
 
 **Billing Cycle**:
@@ -140,5 +167,14 @@ _Avoid_: statement period, month
 
 **Cycle Bill**:
 What a card's Billing Cycle actually demands: its charges in that cycle,
-adjusted to agree with the real statement.
+adjusted to agree with the real statement. A payment settles the Cycle that had
+most recently closed when it was made — bills fall due only after their Cycle
+has closed, so the money clearing one almost never falls inside it.
 _Avoid_: statement balance, amount due
+
+**Set Aside**:
+The cash the household must already have to meet its cards' next bills: each
+card's most recently closed Cycle Bill, less whatever has been paid toward it.
+A Cycle still open is never counted — nothing about it is due yet — so a card
+whose last bill is settled contributes nothing.
+_Avoid_: amount due, upcoming, cash needed

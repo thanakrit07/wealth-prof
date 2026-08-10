@@ -50,8 +50,15 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
   const [categoriesOpen, setCategoriesOpen] = useState(false)
   const [expandedMainId, setExpandedMainId] = useState<string | null>(null)
 
+  const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
   const sharesByTxn = useMemo(() => sharesByTransaction(shares), [shares])
-  const confirmed = useMemo(() => (transactions ?? []).filter((t) => t.confirmed), [transactions])
+  // Unconfirmed rows and Balance Adjustments the household marked "just a
+  // correction" (system category — balanceAdjustments.ts) are excluded from
+  // every total here, same as in TransactionsScreen.
+  const confirmed = useMemo(
+    () => (transactions ?? []).filter((t) => t.confirmed && !categoryById.get(t.category_id ?? '')?.system),
+    [transactions, categoryById],
+  )
   const cardTransactions = useMemo(
     () => (card ? confirmed.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id) : []),
     [card, confirmed],
@@ -86,13 +93,12 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
   // Expense by category, rolled up to effective mains (D10) and to Borne
   // amounts under the active person filter.
   const categoryRows = useMemo<MainRow[]>(() => {
-    const byId = new Map((categories ?? []).map((c) => [c.id, c]))
     const mainTotals = new Map<string, number>()
     const subTotals = new Map<string, Map<string, number>>()
 
     for (const t of filtered) {
       if (t.kind !== 'expense' || !t.category_id) continue
-      const category = byId.get(t.category_id)
+      const category = categoryById.get(t.category_id)
       if (!category) continue
       const amount = person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person)
       const mainId = effectiveMainId(category)
@@ -106,17 +112,17 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
 
     return [...mainTotals.entries()]
       .map(([id, total]) => {
-        const main = byId.get(id)
+        const main = categoryById.get(id)
         if (!main) return null
         const subs = [...(subTotals.get(id) ?? new Map<string, number>()).entries()]
-          .map(([subId, subTotal]) => ({ category: byId.get(subId), total: subTotal }))
+          .map(([subId, subTotal]) => ({ category: categoryById.get(subId), total: subTotal }))
           .filter((row): row is { category: Category; total: number } => row.category != null)
           .sort((a, b) => b.total - a.total)
         return { main, total, subs }
       })
       .filter((row): row is MainRow => row != null)
       .sort((a, b) => b.total - a.total)
-  }, [filtered, categories, person, sharesByTxn])
+  }, [filtered, categoryById, person, sharesByTxn])
   const maxCategoryTotal = categoryRows[0]?.total ?? 0
   const categoryTotal = categoryRows.reduce((sum, row) => sum + row.total, 0)
 

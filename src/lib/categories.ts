@@ -14,6 +14,10 @@ export interface Category {
   sort_order: number
   archived: boolean
   parent_id: string | null
+  // Balance Adjustment's "no" answer files under this (balanceAdjustments.ts)
+  // — excluded from the category picker, Records, and every rollup, but
+  // still a real category a transaction can point at.
+  system: boolean
 }
 
 // Icon colours offered in the picker. Mid-range tones so they stay legible
@@ -37,7 +41,7 @@ export function useCategories(householdId: string) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('v_categories')
-        .select('id, household_id, name, kind, icon, color, sort_order, archived, parent_id')
+        .select('id, household_id, name, kind, icon, color, sort_order, archived, parent_id, system')
         .eq('household_id', householdId)
         .order('kind')
         .order('sort_order')

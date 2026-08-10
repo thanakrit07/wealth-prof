@@ -119,8 +119,13 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   // row), category taps must stop auto-overriding it.
   const [fromTouched, setFromTouched] = useState(Boolean(transaction))
 
-  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
-  const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
+  // CategoryPickerPanel filters out system categories (Modified Bal —
+  // balanceAdjustments.ts) itself, so it's never offered as a destination.
+  // A transaction already filed under one still needs to show its real
+  // label when reopened for edit, though — looked up from the full list,
+  // not a filtered one, or it would silently fall back to the "Choose a
+  // category" placeholder.
+  const selectedCategory: Category | null = categoryId ? ((categories ?? []).find((c) => c.id === categoryId) ?? null) : null
 
   function instrumentLabel(instrument: Instrument): string {
     if (instrument.accountId) return accounts?.find((a) => a.id === instrument.accountId)?.name ?? '…'

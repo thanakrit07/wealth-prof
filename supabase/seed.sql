@@ -64,6 +64,17 @@ insert into accounts (id, household_id, name, type, owner_id, anchor_balance, an
   ('10000000-0000-0000-0000-0000000000b2', '10000000-0000-0000-0000-000000000000',
    'บัญชีธนาคาร พลอย', 'bank', '10000000-0000-0000-0000-0000000000a2', 15000, '2026-07-01');
 
+-- ADR-0013: the app reads an account's balance from account_anchors, not
+-- from the accounts.anchor_balance/anchor_date columns above -- those exist
+-- only so 0027_account_anchors.sql's backfill has something to read when it
+-- runs against a *real*, already-populated database. On a fresh local reset,
+-- migrations always apply before this seed file runs, so that backfill sees
+-- an empty accounts table and produces nothing here; the two accounts above
+-- need their own opening anchor or every local balance reads as zero.
+insert into account_anchors (household_id, account_id, reading_balance, reading_date, baseline_balance, baseline_date) values
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-0000000000b1', 20000, '2026-07-01', 20000, '2026-07-01'),
+  ('10000000-0000-0000-0000-000000000000', '10000000-0000-0000-0000-0000000000b2', 15000, '2026-07-01', 15000, '2026-07-01');
+
 -- A handful of expense categories.
 insert into categories (id, household_id, name, kind, sort_order) values
   ('10000000-0000-0000-0000-000000000101', '10000000-0000-0000-0000-000000000000', 'ของใช้ในบ้าน', 'expense', 0),
@@ -73,6 +84,16 @@ insert into categories (id, household_id, name, kind, sort_order) values
   ('10000000-0000-0000-0000-000000000105', '10000000-0000-0000-0000-000000000000', 'เดินทาง', 'expense', 4),
   ('10000000-0000-0000-0000-000000000106', '10000000-0000-0000-0000-000000000000', 'ช้อปปิ้ง', 'expense', 5),
   ('10000000-0000-0000-0000-000000000107', '10000000-0000-0000-0000-000000000000', 'สุขภาพ/ฟิตเนส', 'expense', 6);
+
+-- This household bypasses seed_default_categories() (it's inserted directly
+-- above, not via create_household()), so it never got the "Other" category
+-- every real household has, or -- since 0028 -- "Modified Bal". Reconcile's
+-- yes/no answer needs one or the other to exist in both kinds.
+insert into categories (id, household_id, name, kind, sort_order, system) values
+  ('10000000-0000-0000-0000-000000000108', '10000000-0000-0000-0000-000000000000', 'Other', 'expense', 7, false),
+  ('10000000-0000-0000-0000-000000000109', '10000000-0000-0000-0000-000000000000', 'Other', 'income', 0, false),
+  ('10000000-0000-0000-0000-00000000010a', '10000000-0000-0000-0000-000000000000', 'Modified Bal', 'expense', 8, true),
+  ('10000000-0000-0000-0000-00000000010b', '10000000-0000-0000-0000-000000000000', 'Modified Bal', 'income', 1, true);
 
 -- Shared transactions (owner_id null), each paid via one person's card.
 insert into transactions (id, household_id, date, kind, category_id, category_kind, note, amount, owner_id, from_card_id) values

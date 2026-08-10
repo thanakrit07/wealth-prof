@@ -1,5 +1,11 @@
 # Balances shows spending capacity per row and net worth in the headline
 
+> **Partly superseded by [ADR-0012](./0012-balances-rows-answer-what-is-due-next.md)** (v3.9).
+> The per-row rule below — that every row answers "how much can I still use?" —
+> no longer holds: a card row leads with its most recently closed Cycle Bill and
+> due date. Everything else here stands, and the ban on summing available credit
+> is stricter now than when it was written.
+
 Every row on Balances answers "how much can I still use?" — an account shows its
 money, a credit card shows the limit it has left (alongside what it currently
 owes). The headline answers a different question, "how much am I worth?", and is

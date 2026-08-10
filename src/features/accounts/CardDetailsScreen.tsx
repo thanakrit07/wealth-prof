@@ -1,0 +1,156 @@
+import { useMemo, useState } from 'react'
+import { ArrowRightLeft, ChevronLeft, ChevronRight } from 'lucide-react'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { FullScreenPage } from '@/components/FullScreenPage'
+import { SwipeableRow } from '@/components/SwipeableRow'
+import { Button } from '@/components/ui/button'
+import { useCards } from '@/lib/cards'
+import { CategoryIcon } from '@/lib/categoryIcons'
+import { categoryPath, useCategories } from '@/lib/categories'
+import { addDays, cycleOf } from '@/lib/finance/billingCycle'
+import { formatBaht } from '@/lib/format'
+import { useHousehold } from '@/lib/HouseholdContext'
+import { dayMonthLabel, dayOfMonthLabel, weekdayLabel } from '@/lib/month'
+import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
+import { cn } from '@/lib/utils'
+import { CardCycleSummary } from '@/features/transactions/CardCycleSummary'
+import { TransactionSheet } from '@/features/transactions/TransactionSheet'
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+interface Props {
+  cardId: string
+  onClose: () => void
+}
+
+// Card Details mirrors Account Details, but a card's natural period is its
+// billing cycle, not the calendar month (§7.3) — the nav here steps cycles,
+// same as the header's own card-cycle arrows elsewhere in the app, rather
+// than months.
+export function CardDetailsScreen({ cardId, onClose }: Props) {
+  const { householdId } = useHousehold()
+  const { data: cards } = useCards(householdId)
+  const [anchor, setAnchor] = useState(todayIso())
+  const { data: categories } = useCategories(householdId)
+  const [editing, setEditing] = useState<Transaction | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<Transaction | null>(null)
+  const remove = useDeleteTransaction(householdId)
+
+  const card = (cards ?? []).find((c) => c.id === cardId) ?? null
+  const cycle = card ? cycleOf(card, anchor) : null
+  const range = cycle ? { start: cycle.start, end: cycle.end } : { start: anchor, end: anchor }
+  const { data: cycleTxns } = useTransactions(householdId, range)
+  const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
+
+  const items = useMemo(
+    () => (cycleTxns ?? []).filter((t) => t.confirmed && (t.from_card_id === cardId || t.to_card_id === cardId)),
+    [cycleTxns, cardId],
+  )
+
+  const groups = useMemo(() => {
+    const map = new Map<string, Transaction[]>()
+    for (const t of items) {
+      const list = map.get(t.date) ?? []
+      list.push(t)
+      map.set(t.date, list)
+    }
+    return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
+  }, [items])
+
+  async function handleDelete(t: Transaction) {
+    await remove.mutateAsync(t.id)
+    toast.success('Transaction deleted')
+  }
+
+  if (!card || !cycle) return null
+
+  return (
+    <FullScreenPage
+      title={card.name}
+      onClose={onClose}
+      headerActions={
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={() => setAnchor(addDays(cycle.start, -1))} aria-label="Previous cycle">
+            <ChevronLeft className="size-4" />
+          </Button>
+          <span className="px-1 text-sm font-medium">
+            {dayMonthLabel(cycle.start)} – {dayMonthLabel(cycle.end)}
+          </span>
+          <Button variant="ghost" size="icon" onClick={() => setAnchor(addDays(cycle.end, 1))} aria-label="Next cycle">
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
+      }
+    >
+      <div className="mx-auto max-w-2xl space-y-3 p-4">
+        <CardCycleSummary card={card} cycle={cycle} cycleTransactions={items} />
+
+        {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this cycle.</p>}
+
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {groups.map(([date, dayItems], groupIndex) => (
+            <div key={date} className={groupIndex > 0 ? 'border-t' : undefined}>
+              <div className="flex items-center gap-2 bg-muted/50 px-3 py-1">
+                <span className="text-sm font-semibold tabular-nums">{dayOfMonthLabel(date)}</span>
+                <span className="rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground">{weekdayLabel(date)}</span>
+              </div>
+              <ul>
+                {dayItems.map((t) => {
+                  const category = t.category_id ? categoryById.get(t.category_id) : null
+                  const isTransfer = t.kind === 'transfer'
+                  const isOut = t.from_card_id === cardId
+                  const catPath = category ? categoryPath(category, categories ?? []) : null
+                  const title = isTransfer ? (isOut ? 'Payment out' : 'Payment in') : t.note || catPath || t.kind
+                  return (
+                    <li key={t.id} className="border-t first:border-t-0">
+                      <SwipeableRow onDelete={() => setConfirmingDelete(t)}>
+                        <button
+                          onClick={() => setEditing(t)}
+                          className="flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left transition-colors active:bg-accent/60"
+                        >
+                          {isTransfer ? (
+                            <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <CategoryIcon icon={category?.icon ?? null} color={category?.color} className="size-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="truncate text-sm">{title}</span>
+                            {catPath && catPath !== title && (
+                              <span className="block truncate text-[11px] text-muted-foreground">{catPath}</span>
+                            )}
+                          </span>
+                          <span
+                            className={cn(
+                              'shrink-0 text-sm tabular-nums',
+                              isTransfer ? 'text-muted-foreground' : 'text-destructive',
+                            )}
+                          >
+                            {isTransfer ? (isOut ? '-' : '+') : '-'}
+                            {formatBaht(t.amount)}
+                          </span>
+                        </button>
+                      </SwipeableRow>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {editing && <TransactionSheet open onOpenChange={(open) => !open && setEditing(null)} transaction={editing} />}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this transaction?"
+          description="Removes it from every total. You'll have a few seconds to undo right after."
+          onConfirm={() => handleDelete(confirmingDelete)}
+          onClose={() => setConfirmingDelete(null)}
+        />
+      )}
+    </FullScreenPage>
+  )
+}

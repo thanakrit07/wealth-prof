@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, Pencil, Plus } from 'lucide-react'
+import { differenceInCalendarDays, parse } from 'date-fns'
+import { ChevronDown, Pencil, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DateField } from '@/components/DateField'
 import { SwipeableRow } from '@/components/SwipeableRow'
@@ -12,7 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { OwnerSelect } from '@/components/OwnerSelect'
 import { useAccounts, useCreateAccount, useUpdateAccount, type Account, type AccountType } from '@/lib/accounts'
+import { adjustmentCategory } from '@/lib/balanceAdjustments'
 import { useCards, useCreateCard, useUpdateCard, type Card } from '@/lib/cards'
+import { useCategories, type Category } from '@/lib/categories'
 import { accountBalance, cardOutstanding, memberNetWorth } from '@/lib/finance/balances'
 import type { PersonFilter } from '@/lib/filters'
 import { useHousehold } from '@/lib/HouseholdContext'
@@ -24,13 +27,32 @@ import {
 } from '@/lib/instruments'
 import { formatBaht } from '@/lib/format'
 import { dayMonthLabel } from '@/lib/month'
-import { useTransactions } from '@/lib/transactions'
+import { useCreateTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
 import { SettleUpSheet } from '@/features/home/SettleUpSheet'
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
+}
+
+// A row says how stale it is only once it is stale — this is the
+// threshold, not a second figure competing with the balance.
+const STALE_AFTER_DAYS = 30
+
+// The most recent date the household actually confirmed this account's
+// balance: either an old anchor reading (accounts reconciled before Balance
+// Adjustments existed) or the date of its newest Balance Adjustment
+// transaction, whichever is later. Both of Reconcile's two answers count —
+// `source === 'reconcile'` is common to both regardless of which category
+// the amount landed in.
+function lastConfirmedDate(account: Account, transactions: Transaction[]): string | null {
+  let latest = account.last_confirmed_date
+  for (const t of transactions) {
+    if (t.source !== 'reconcile' || t.from_account_id !== account.id) continue
+    if (!latest || t.date > latest) latest = t.date
+  }
+  return latest
 }
 
 // Wide enough to hold every real row (anchor dates in the past) and every
@@ -174,9 +196,11 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   const { data: accounts } = useAccounts(householdId)
   const { data: cards } = useCards(householdId)
   const { data: transactions } = useTransactions(householdId, ALL_TIME)
+  const { data: categories } = useCategories(householdId)
   const { data: debts } = useUnsettledShares(householdId)
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
+  const [reconciling, setReconciling] = useState<Account | null>(null)
   const [deleting, setDeleting] = useState<{ kind: InstrumentKind; id: string; name: string } | null>(null)
   const [netWorthOpen, setNetWorthOpen] = useState(false)
 
@@ -248,8 +272,10 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
                 key={account.id}
                 account={account}
                 balance={accountBalance(account, allTxns, today)}
+                lastConfirmedDate={lastConfirmedDate(account, allTxns)}
                 onOpen={() => onOpenAccount(account.id)}
                 onEdit={() => setEditingAccount(account)}
+                onReconcile={() => setReconciling(account)}
                 onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
               />
             ))}
@@ -283,8 +309,10 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
                 key={account.id}
                 account={account}
                 balance={accountBalance(account, allTxns, today)}
+                lastConfirmedDate={lastConfirmedDate(account, allTxns)}
                 onOpen={() => onOpenAccount(account.id)}
                 onEdit={() => setEditingAccount(account)}
+                onReconcile={() => setReconciling(account)}
                 onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
               />
             ))}
@@ -338,6 +366,14 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
         />
       )}
       {deleting && <DeleteInstrumentDialog target={deleting} onClose={() => setDeleting(null)} />}
+      {reconciling && (
+        <ReconcileDialog
+          account={reconciling}
+          currentBalance={accountBalance(reconciling, allTxns, today)}
+          categories={categories ?? []}
+          onClose={() => setReconciling(null)}
+        />
+      )}
     </div>
   )
 }
@@ -345,16 +381,25 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
 function AccountRow({
   account,
   balance,
+  lastConfirmedDate,
   onOpen,
   onEdit,
+  onReconcile,
   onDelete,
 }: {
   account: Account
   balance: number
+  lastConfirmedDate: string | null
   onOpen: () => void
   onEdit: () => void
+  onReconcile: () => void
   onDelete: () => void
 }) {
+  // A quiet signal, not a second figure — only shown once a reading is
+  // genuinely old, and it qualifies the balance already there.
+  const staleDays = lastConfirmedDate ? differenceInCalendarDays(new Date(), parse(lastConfirmedDate, 'yyyy-MM-dd', new Date())) : null
+  const isStale = staleDays !== null && staleDays >= STALE_AFTER_DAYS
+
   return (
     <li className="overflow-hidden rounded-lg border">
       <SwipeableRow onDelete={onDelete}>
@@ -367,9 +412,13 @@ function AccountRow({
             disabled={account.archived}
             className={account.archived ? 'flex-1 truncate text-left text-muted-foreground line-through' : 'flex-1 truncate text-left'}
           >
-            {account.name}
+            <span className="block truncate">{account.name}</span>
+            {isStale && <span className="block text-xs text-muted-foreground">Not confirmed in {staleDays} days</span>}
           </button>
           <span className="text-muted-foreground">{formatBaht(balance)}</span>
+          <Button variant="ghost" size="icon" className="size-7" onClick={onReconcile} aria-label={`Reconcile ${account.name}`}>
+            <RefreshCw className="size-3.5" />
+          </Button>
           <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} aria-label="Edit">
             <Pencil className="size-3.5" />
           </Button>
@@ -416,33 +465,114 @@ function CardRow({
   )
 }
 
+// Shared by both dialogs below: once a balance difference is known, ask
+// whether it's really something that happened (files under the household's
+// ordinary "Other" category, so it reads like any other transaction) or
+// just a correction (files under "Modified Bal", excluded from the picker,
+// Records and every rollup — visible only on the account's own screen).
+// Both answers create a real Transaction; only the category differs.
+function BalanceAdjustmentStep({
+  diff,
+  onAnswer,
+  pending,
+}: {
+  diff: number
+  onAnswer: (visible: boolean) => void
+  pending: boolean
+}) {
+  const kind = diff > 0 ? 'income' : 'expense'
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{formatBaht(Math.abs(diff))} unaccounted for</DialogTitle>
+      </DialogHeader>
+      <p className="text-sm text-muted-foreground">
+        Is this really {kind === 'income' ? 'income' : 'an expense'} — something that actually happened — or just a
+        correction?
+      </p>
+      <DialogFooter className="flex-col gap-2 sm:flex-col">
+        <Button className="w-full" onClick={() => onAnswer(true)} disabled={pending}>
+          Yes, record it as {kind}
+        </Button>
+        <Button variant="outline" className="w-full" onClick={() => onAnswer(false)} disabled={pending}>
+          No, just adjust the balance
+        </Button>
+      </DialogFooter>
+    </>
+  )
+}
+
+// A new account asks for a starting balance (Money Manager's pattern this
+// whole feature is modelled on): pressing Save creates the account, and if
+// that balance is non-zero, BalanceAdjustmentStep asks the same yes/no
+// question Reconcile below does before recording it.
 function AccountDialog({ account, onClose }: { account: Account | null; onClose: () => void }) {
-  const { householdId } = useHousehold()
+  const { householdId, self } = useHousehold()
+  const { data: categories } = useCategories(householdId)
   const [name, setName] = useState(account?.name ?? '')
   const [type, setType] = useState<AccountType>(account?.type ?? 'bank')
   const [ownerId, setOwnerId] = useState<string | null>(account?.owner_id ?? null)
-  const [anchorBalance, setAnchorBalance] = useState(String(account?.anchor_balance ?? '0'))
-  const [anchorDate, setAnchorDate] = useState(account?.anchor_date ?? new Date().toISOString().slice(0, 10))
+  const [startingBalance, setStartingBalance] = useState('0')
+  const [startingDate, setStartingDate] = useState(todayIso())
   const [archived, setArchived] = useState(account?.archived ?? false)
+  const [newAccountId, setNewAccountId] = useState<string | null>(null)
   const create = useCreateAccount(householdId)
   const update = useUpdateAccount(householdId)
+  const createTransaction = useCreateTransaction(householdId)
 
   async function handleSave() {
-    const balance = Number(anchorBalance)
     if (account) {
-      await update.mutateAsync({
-        id: account.id,
-        name,
-        type,
-        owner_id: ownerId,
-        anchor_balance: balance,
-        anchor_date: anchorDate,
-        archived,
-      })
-    } else {
-      await create.mutateAsync({ name, type, ownerId, anchorBalance: balance, anchorDate })
+      await update.mutateAsync({ id: account.id, name, type, owner_id: ownerId, archived })
+      onClose()
+      return
     }
+    const id = await create.mutateAsync({ name, type, ownerId })
+    if (Number(startingBalance) === 0) {
+      onClose()
+      return
+    }
+    setNewAccountId(id)
+  }
+
+  async function handleAdjustmentAnswer(visible: boolean) {
+    if (!newAccountId || !categories) return
+    const diff = Number(startingBalance)
+    const category = adjustmentCategory(categories, diff > 0 ? 'income' : 'expense', visible)
+    if (!category) {
+      toast.error('Missing the "Other"/"Modified Bal" category for this household.')
+      onClose()
+      return
+    }
+    await createTransaction.mutateAsync({
+      date: startingDate,
+      kind: diff > 0 ? 'income' : 'expense',
+      categoryId: category.id,
+      categoryKind: category.kind,
+      description: '',
+      amount: Math.abs(diff),
+      ownerId: self.id,
+      fromAccountId: newAccountId,
+      fromCardId: null,
+      toAccountId: null,
+      toCardId: null,
+      note: 'Difference',
+      source: 'reconcile',
+    })
     onClose()
+  }
+
+  if (newAccountId) {
+    return (
+      <Dialog open onOpenChange={(open) => !open && onClose()}>
+        <DialogContent>
+          <BalanceAdjustmentStep
+            diff={Number(startingBalance)}
+            onAnswer={handleAdjustmentAnswer}
+            pending={createTransaction.isPending}
+          />
+        </DialogContent>
+      </Dialog>
+    )
   }
 
   return (
@@ -473,22 +603,24 @@ function AccountDialog({ account, onClose }: { account: Account | null; onClose:
             <Label>Owner</Label>
             <OwnerSelect value={ownerId} onChange={setOwnerId} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="account-balance">Anchor balance</Label>
-              <Input
-                id="account-balance"
-                type="number"
-                inputMode="decimal"
-                value={anchorBalance}
-                onChange={(e) => setAnchorBalance(e.target.value)}
-              />
+          {!account && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="account-balance">Starting balance</Label>
+                <Input
+                  id="account-balance"
+                  type="number"
+                  inputMode="decimal"
+                  value={startingBalance}
+                  onChange={(e) => setStartingBalance(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="account-date">As of</Label>
+                <DateField id="account-date" value={startingDate} onChange={setStartingDate} />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="account-date">Anchor date</Label>
-              <DateField id="account-date" value={anchorDate} onChange={setAnchorDate} />
-            </div>
-          </div>
+          )}
           {account && (
             <div className="flex items-center justify-between">
               <Label htmlFor="account-archived">Archived</Label>
@@ -503,6 +635,100 @@ function AccountDialog({ account, onClose }: { account: Account | null; onClose:
           <Button onClick={handleSave} disabled={!name.trim() || create.isPending || update.isPending}>
             Save
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Reconcile: type what the bank says, and if it disagrees with what the
+// ledger computed, BalanceAdjustmentStep asks the same yes/no question
+// account creation does before recording the difference.
+function ReconcileDialog({
+  account,
+  currentBalance,
+  categories,
+  onClose,
+}: {
+  account: Account
+  currentBalance: number
+  categories: Category[]
+  onClose: () => void
+}) {
+  const { householdId, self } = useHousehold()
+  const [reading, setReading] = useState(String(currentBalance))
+  const [diff, setDiff] = useState<number | null>(null)
+  const createTransaction = useCreateTransaction(householdId)
+
+  function handleContinue() {
+    const d = Number(reading) - currentBalance
+    if (d === 0) {
+      toast.info('Already matches — nothing to record.')
+      onClose()
+      return
+    }
+    setDiff(d)
+  }
+
+  async function handleAdjustmentAnswer(visible: boolean) {
+    if (diff === null) return
+    const category = adjustmentCategory(categories, diff > 0 ? 'income' : 'expense', visible)
+    if (!category) {
+      toast.error('Missing the "Other"/"Modified Bal" category for this household.')
+      onClose()
+      return
+    }
+    await createTransaction.mutateAsync({
+      date: todayIso(),
+      kind: diff > 0 ? 'income' : 'expense',
+      categoryId: category.id,
+      categoryKind: category.kind,
+      description: '',
+      amount: Math.abs(diff),
+      ownerId: self.id,
+      fromAccountId: account.id,
+      fromCardId: null,
+      toAccountId: null,
+      toCardId: null,
+      note: 'Difference',
+      source: 'reconcile',
+    })
+    toast.success(`Reconciled "${account.name}"`)
+    onClose()
+  }
+
+  if (diff !== null) {
+    return (
+      <Dialog open onOpenChange={(open) => !open && onClose()}>
+        <DialogContent>
+          <BalanceAdjustmentStep diff={diff} onAnswer={handleAdjustmentAnswer} pending={createTransaction.isPending} />
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Reconcile "{account.name}"</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <Label htmlFor="reconcile-balance">What does the bank app say right now?</Label>
+          <Input
+            id="reconcile-balance"
+            type="number"
+            inputMode="decimal"
+            value={reading}
+            onChange={(e) => setReading(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleContinue}>Continue</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

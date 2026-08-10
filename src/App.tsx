@@ -11,7 +11,9 @@ import { ResetPasswordScreen } from './components/ResetPasswordScreen'
 import { TransactionsScreen } from '@/features/transactions/TransactionsScreen'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
 import { RecordsSummary } from '@/features/transactions/RecordsSummary'
+import { AccountDetailsScreen } from '@/features/accounts/AccountDetailsScreen'
 import { AccountsScreen } from '@/features/accounts/AccountsScreen'
+import { CardDetailsScreen } from '@/features/accounts/CardDetailsScreen'
 import { InstallmentMaterialiser } from '@/features/installments/InstallmentMaterialiser'
 import { PlanScreen } from '@/features/plan/PlanScreen'
 import { RecurringMaterialiser } from '@/features/plan/RecurringMaterialiser'
@@ -47,6 +49,8 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
   const [cardAnchor, setCardAnchor] = useState(todayIso())
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [viewingAccountId, setViewingAccountId] = useState<string | null>(null)
+  const [viewingCardId, setViewingCardId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const { data: cards } = useCards(self.household_id)
   const activeCard = cardId ? ((cards ?? []).find((c) => c.id === cardId) ?? null) : null
@@ -76,15 +80,8 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
     balances: (
       <AccountsScreen
         person={person as PersonFilter}
-        onOpenAccount={(accountId) => {
-          setAccount(accountId)
-          setTab('transactions')
-        }}
-        onOpenCard={(id) => {
-          setCardId(id)
-          setCardAnchor(todayIso())
-          setTab('transactions')
-        }}
+        onOpenAccount={(accountId) => setViewingAccountId(accountId)}
+        onOpenCard={(id) => setViewingCardId(id)}
       />
     ),
     upcoming: <PlanScreen />,
@@ -148,6 +145,10 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
           <SettingsScreen />
         </FullScreenPage>
       )}
+      {viewingAccountId && (
+        <AccountDetailsScreen accountId={viewingAccountId} onClose={() => setViewingAccountId(null)} />
+      )}
+      {viewingCardId && <CardDetailsScreen cardId={viewingCardId} onClose={() => setViewingCardId(null)} />}
     </HouseholdProvider>
   )
 }

@@ -104,8 +104,16 @@ export function TransactionsScreen({
   const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
 
-  // Unconfirmed (generated, unreviewed) rows are excluded from every total (§6.6).
-  const confirmed = useMemo(() => (transactions ?? []).filter((t) => t.confirmed), [transactions])
+  // Unconfirmed (generated, unreviewed) rows are excluded from every total
+  // (§6.6), same as rows filed under a system category — a Balance
+  // Adjustment the household said "no, just adjust the balance" to
+  // (balanceAdjustments.ts) reads nowhere in Records, including when
+  // filtered to the very account it's on; it belongs to that account's own
+  // screen instead.
+  const confirmed = useMemo(
+    () => (transactions ?? []).filter((t) => t.confirmed && !categoryById.get(t.category_id ?? '')?.system),
+    [transactions, categoryById],
+  )
 
   const matchesCategory = (t: Transaction) => {
     if (!categoryId) return true

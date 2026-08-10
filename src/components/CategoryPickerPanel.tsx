@@ -35,7 +35,7 @@ export function CategoryPickerPanel({ categories, kind, selectedId, onSelect }: 
     if (current?.parent_id) setExpandedMainId(current.parent_id)
   }, [categories, selectedId])
 
-  const relevant = categories.filter((c) => !c.archived && c.kind === kind)
+  const relevant = categories.filter((c) => !c.archived && !c.system && c.kind === kind)
   const bySortOrder = (a: Category, b: Category) => a.sort_order - b.sort_order
   const mainCategories = relevant.filter((c) => c.parent_id === null).sort(bySortOrder)
   const subsOf = (parentId: string) => relevant.filter((c) => c.parent_id === parentId).sort(bySortOrder)

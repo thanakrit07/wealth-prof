@@ -40,7 +40,7 @@ export function CategoriesScreen() {
   const reorder = useReorderCategories(householdId)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
 
-  const all = (categories ?? []).filter((c) => c.kind === kind && !c.archived)
+  const all = (categories ?? []).filter((c) => c.kind === kind && !c.archived && !c.system)
   const mains = all.filter((c) => c.parent_id === null).sort((a, b) => a.sort_order - b.sort_order)
   const subsOf = (parentId: string) => all.filter((c) => c.parent_id === parentId).sort((a, b) => a.sort_order - b.sort_order)
   const openMain = openMainId ? (mains.find((c) => c.id === openMainId) ?? null) : null

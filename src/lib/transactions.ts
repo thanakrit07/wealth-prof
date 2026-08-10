@@ -4,6 +4,12 @@ import type { CategoryKind } from './categories'
 
 export type TransactionKind = 'income' | 'expense' | 'transfer'
 
+// 'reconcile': a Balance Adjustment (see balanceAdjustments.ts) — the
+// household confirmed an instrument's real balance and the difference from
+// what the ledger predicted became this transaction, rather than a silently
+// moved anchor. Every other source predates that and is unrelated to it.
+export type TransactionSource = 'manual' | 'recurring' | 'installment' | 'import' | 'reconcile'
+
 export interface Transaction {
   id: string
   household_id: string
@@ -20,7 +26,7 @@ export interface Transaction {
   to_card_id: string | null
   note: string | null
   confirmed: boolean
-  source: string
+  source: TransactionSource
   source_key: string | null
 }
 
@@ -37,6 +43,8 @@ export interface TransactionInput {
   toAccountId: string | null
   toCardId: string | null
   note: string | null
+  /** Defaults to 'manual' at the DB level when omitted. */
+  source?: TransactionSource
 }
 
 function toRow(householdId: string, input: TransactionInput) {
@@ -54,6 +62,7 @@ function toRow(householdId: string, input: TransactionInput) {
     to_account_id: input.toAccountId,
     to_card_id: input.toCardId,
     note: input.note,
+    ...(input.source ? { source: input.source } : {}),
   }
 }
 

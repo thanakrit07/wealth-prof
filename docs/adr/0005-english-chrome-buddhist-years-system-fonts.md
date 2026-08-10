@@ -1,5 +1,11 @@
 # The interface is English, the years are Buddhist, and the fonts are the system's
 
+> **The font rule is superseded by [ADR-0009](./0009-emerald-and-self-hosted-ibm-plex.md)** (v4).
+> Dropping Mitr and Prompt still stands; adopting the platform's font does not.
+> The argument below misses that the *user's data* is Thai even when the chrome
+> is English, so the app never escaped needing a Thai face — it only stopped
+> choosing one. English chrome and Buddhist-Era years are unaffected.
+
 Labels, buttons and headings are written in English. Every year shown to the user
 is Buddhist Era in full ("5 Aug 2569"). Category names, notes and the household
 members' names are whatever the user typed, in whichever language. The bundled

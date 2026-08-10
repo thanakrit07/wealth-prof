@@ -104,7 +104,7 @@ export function RecurringRuleSheet({ rule, onClose, prefill }: Props) {
   const [active, setActive] = useState(rule?.active ?? true)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
-  const relevantCategories = (categories ?? []).filter((c) => !c.archived && c.kind === kind)
+  const relevantCategories = (categories ?? []).filter((c) => !c.archived && !c.system && c.kind === kind)
   const selectedCategory: Category | null = categoryId ? (relevantCategories.find((c) => c.id === categoryId) ?? null) : null
 
   function instrumentLabel(instrument: Instrument): string {
