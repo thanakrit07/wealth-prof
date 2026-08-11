@@ -244,6 +244,16 @@ export function TransactionsScreen({
                   const details = [catPath === title ? null : catPath, instrumentLabel(t, 'from'), owner?.display_name]
                     .filter(Boolean)
                     .join(' · ')
+                  // A row with an explicit Split (D13) previously looked
+                  // identical to an ordinary personal one under "All" — the
+                  // "yours ฿X" line only ever appeared once filtered to a
+                  // specific person. One dot per member who Bears part of
+                  // it, in their own colour (the same dot Settings/Balances
+                  // already use for "this belongs to this person"), makes
+                  // it visible without adding a new visual vocabulary.
+                  const bearers = [...new Set((sharesByTxn.get(t.id) ?? []).filter((s) => s.share_amount > 0).map((s) => s.member_id))]
+                    .map((id) => memberById.get(id))
+                    .filter((m): m is (typeof members)[number] => m != null)
                   // Under a specific person's filter, a shared row's full
                   // amount stays the headline (the coffee cost what it cost)
                   // and their own portion shows underneath — showing only the
@@ -277,10 +287,19 @@ export function TransactionsScreen({
                                   </span>
                                 )}
                               </span>
-                              {(details || (mine != null && mine > 0 && mine < t.amount)) && (
-                                <span className="block truncate text-[11px] text-muted-foreground">
-                                  {details}
-                                  {mine != null && mine > 0 && mine < t.amount && (details ? ` · yours ${formatBaht(mine)}` : `yours ${formatBaht(mine)}`)}
+                              {(details || (mine != null && mine > 0 && mine < t.amount) || bearers.length > 0) && (
+                                <span className="flex items-center gap-1">
+                                  <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                                    {details}
+                                    {mine != null && mine > 0 && mine < t.amount && (details ? ` · yours ${formatBaht(mine)}` : `yours ${formatBaht(mine)}`)}
+                                  </span>
+                                  {bearers.length > 0 && (
+                                    <span className="flex shrink-0 items-center gap-0.5" aria-label={`Shared with ${bearers.map((m) => m.display_name).join(', ')}`}>
+                                      {bearers.map((m) => (
+                                        <span key={m.id} className="size-1.5 rounded-full" style={{ backgroundColor: m.color }} />
+                                      ))}
+                                    </span>
+                                  )}
                                 </span>
                               )}
                             </span>

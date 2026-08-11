@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import { Trash2 } from 'lucide-react'
 
 const REVEAL_WIDTH = 72
@@ -6,6 +6,21 @@ const REVEAL_WIDTH = 72
 // vertical scroll — small enough to feel responsive, large enough that
 // scrolling the list never snags a row open.
 const DIRECTION_LOCK = 8
+
+// Module scope, not component state: only one row's Delete stays revealed
+// via swipe at a time, across every list in the app (Records, Balances,
+// Account/Card Details all render their own independent SwipeableRows).
+// Swiping a second row open closes whichever other row was left open, the
+// same way opening a Select or a Dialog elsewhere closes the one that was
+// already open — one persistent "armed to delete" state on screen at a
+// time, not one per row.
+//
+// Holds the open row's own `setOffset` directly, not a wrapper closure —
+// a `useState` setter is the one thing here guaranteed to keep the same
+// identity across that row's re-renders, so comparing against it (instead
+// of a function declared fresh every render) can't misidentify a row as
+// "a different row" just because it re-rendered for an unrelated reason.
+let openRowSetOffset: ((offset: number) => void) | null = null
 
 interface Props {
   onDelete: () => void
@@ -54,11 +69,28 @@ export function SwipeableRow({ onDelete, children }: Props) {
     if (start.current) {
       const opened = offset < -REVEAL_WIDTH / 2
       setOffset(opened ? -REVEAL_WIDTH : 0)
+      if (opened) {
+        // Close whichever other row was left open (a no-op if it was
+        // already this one, or if none was), then this row becomes it.
+        if (openRowSetOffset !== setOffset) openRowSetOffset?.(0)
+        openRowSetOffset = setOffset
+      } else if (openRowSetOffset === setOffset) {
+        openRowSetOffset = null
+      }
     }
     start.current = null
     axis.current = 'undecided'
     setDragging(false)
   }
+
+  // Unmounting (row deleted, list filtered/re-rendered) while still
+  // registered as the open one must not leave a stale closer pointing at a
+  // component that no longer exists.
+  useEffect(() => {
+    return () => {
+      if (openRowSetOffset === setOffset) openRowSetOffset = null
+    }
+  }, [setOffset])
 
   // Swiped past the halfway point (touch) or hovering/focused (mouse,
   // keyboard) both mean the same thing: show the button.
@@ -93,6 +125,7 @@ export function SwipeableRow({ onDelete, children }: Props) {
         onClick={() => {
           setOffset(0)
           setRevealed(false)
+          if (openRowSetOffset === setOffset) openRowSetOffset = null
           onDelete()
         }}
         onFocus={() => setRevealed(true)}

@@ -10,9 +10,11 @@ import { useAccounts } from '@/lib/accounts'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { categoryPath, useCategories } from '@/lib/categories'
 import { accountBalance } from '@/lib/finance/balances'
+import { sharesByTransaction } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { currentMonthKey, dayOfMonthLabel, monthLabel, monthRange, shiftMonth, weekdayLabel } from '@/lib/month'
+import { useTransactionShares } from '@/lib/transactionShares'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
 import { TransactionSheet } from '@/features/transactions/TransactionSheet'
@@ -38,7 +40,7 @@ interface Props {
 // under "Modified Bal" are deliberately excluded from Records itself
 // (balanceAdjustments.ts) and need somewhere to actually be seen.
 export function AccountDetailsScreen({ accountId, onClose }: Props) {
-  const { householdId } = useHousehold()
+  const { householdId, members } = useHousehold()
   const { data: accounts } = useAccounts(householdId)
   const { data: allTimeTxns } = useTransactions(householdId, ALL_TIME)
   const [month, setMonth] = useState(currentMonthKey())
@@ -46,12 +48,15 @@ export function AccountDetailsScreen({ accountId, onClose }: Props) {
   const range = useMemo(() => monthRange(month), [month])
   const { data: monthTxns } = useTransactions(householdId, range)
   const { data: categories } = useCategories(householdId)
+  const { data: shares } = useTransactionShares(householdId)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState<Transaction | null>(null)
   const remove = useDeleteTransaction(householdId)
 
   const account = (accounts ?? []).find((a) => a.id === accountId) ?? null
   const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
+  const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
+  const sharesByTxn = useMemo(() => sharesByTransaction(shares), [shares])
 
   const items = useMemo(
     () => (monthTxns ?? []).filter((t) => t.confirmed && (t.from_account_id === accountId || t.to_account_id === accountId)),
@@ -119,6 +124,12 @@ export function AccountDetailsScreen({ accountId, onClose }: Props) {
                   const isOut = t.from_account_id === accountId
                   const catPath = category ? categoryPath(category, categories ?? []) : null
                   const title = isTransfer ? (isOut ? 'Transfer out' : 'Transfer in') : t.note || catPath || t.kind
+                  // One dot per member who Bears part of this row (D13) —
+                  // same colour convention as Settings/Balances, so a Split
+                  // is visible here too, not just in Records.
+                  const bearers = [...new Set((sharesByTxn.get(t.id) ?? []).filter((s) => s.share_amount > 0).map((s) => s.member_id))]
+                    .map((id) => memberById.get(id))
+                    .filter((m): m is (typeof members)[number] => m != null)
                   return (
                     <li key={t.id} className="border-t first:border-t-0">
                       <SwipeableRow onDelete={() => setConfirmingDelete(t)}>
@@ -140,9 +151,23 @@ export function AccountDetailsScreen({ accountId, onClose }: Props) {
                                 </span>
                               )}
                             </span>
-                            {catPath && catPath !== title && (
-                              <span className="block truncate text-[11px] text-muted-foreground">{catPath}</span>
-                            )}
+                            {(catPath && catPath !== title) || bearers.length > 0 ? (
+                              <span className="flex items-center gap-1">
+                                {catPath && catPath !== title && (
+                                  <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{catPath}</span>
+                                )}
+                                {bearers.length > 0 && (
+                                  <span
+                                    className="flex shrink-0 items-center gap-0.5"
+                                    aria-label={`Shared with ${bearers.map((m) => m.display_name).join(', ')}`}
+                                  >
+                                    {bearers.map((m) => (
+                                      <span key={m.id} className="size-1.5 rounded-full" style={{ backgroundColor: m.color }} />
+                                    ))}
+                                  </span>
+                                )}
+                              </span>
+                            ) : null}
                           </span>
                           <span
                             className={cn(
