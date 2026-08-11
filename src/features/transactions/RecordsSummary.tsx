@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { CategoryIcon } from '@/lib/categoryIcons'
-import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
+import { CATEGORY_COLORS, effectiveMainId, useCategories, type Category } from '@/lib/categories'
 import type { Card } from '@/lib/cards'
 import { addDays, cycleOf, type Cycle } from '@/lib/finance/billingCycle'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { borneAmount, matchesPersonFilter, sharesByTransaction, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
-import { monthRange } from '@/lib/month'
+import { monthLabel, monthRange, shiftMonth } from '@/lib/month'
 import { useTransactionShares } from '@/lib/transactionShares'
 import { useTransactions } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
@@ -17,6 +17,100 @@ interface MainRow {
   main: Category
   total: number
   subs: { category: Category; total: number }[]
+}
+
+// F (redesign plan): a category donut, CSS conic-gradient rather than a
+// charting library — the prototype's own read was that the simple case
+// needs no dependency, and a ring is exactly that case. Reuses
+// categoryRows/categoryTotal, so it's always in sync with the list below it.
+function CategoryDonut({ rows, total }: { rows: MainRow[]; total: number }) {
+  const stops = useMemo(() => {
+    if (total <= 0) return []
+    let cursor = 0
+    return rows.map((row, i) => {
+      const pct = (row.total / total) * 100
+      const start = cursor
+      cursor += pct
+      return { color: row.main.color ?? CATEGORY_COLORS[i % CATEGORY_COLORS.length], start, end: cursor }
+    })
+  }, [rows, total])
+
+  if (stops.length === 0) return null
+
+  const gradient = stops.map((s) => `${s.color} ${s.start}% ${s.end}%`).join(', ')
+
+  return (
+    <div className="flex items-center justify-center py-2">
+      <div className="relative size-28 shrink-0 rounded-full" style={{ background: `conic-gradient(${gradient})` }}>
+        <div className="absolute inset-3 flex flex-col items-center justify-center rounded-full bg-card text-center">
+          <span className="text-[10px] text-muted-foreground">Spent</span>
+          <span className="text-sm font-semibold">{formatBaht(total)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const TREND_MONTHS = 6
+
+// F: a month trend, so "is this month normal" has an answer without
+// tapping back through five months by hand. Net (income − expense), not
+// separate bars — the sign is the thing worth seeing at a glance, and the
+// gap-shows-the-story approach already works for CardForecastTab's
+// Posted/Projected split.
+function MonthTrendChart({ householdId, month, person }: { householdId: string; month: string; person: PersonFilter }) {
+  const trendRange = useMemo(() => {
+    const firstMonth = shiftMonth(month, -(TREND_MONTHS - 1))
+    return { start: monthRange(firstMonth).start, end: monthRange(month).end }
+  }, [month])
+  const { data: transactions } = useTransactions(householdId, trendRange)
+  const { data: categories } = useCategories(householdId)
+  const { data: shares } = useTransactionShares(householdId)
+
+  const months = useMemo(() => {
+    return Array.from({ length: TREND_MONTHS }, (_, i) => shiftMonth(month, -(TREND_MONTHS - 1 - i)))
+  }, [month])
+
+  const rows = useMemo(() => {
+    const categoryById = new Map((categories ?? []).map((c) => [c.id, c]))
+    const sharesByTxn = sharesByTransaction(shares)
+    const netByMonth = new Map<string, number>()
+    for (const t of transactions ?? []) {
+      if (!t.confirmed || categoryById.get(t.category_id ?? '')?.system) continue
+      if (!matchesPersonFilter(t, sharesByTxn, person)) continue
+      if (t.kind === 'transfer') continue
+      const key = t.date.slice(0, 7)
+      const amount = person === 'all' ? t.amount : borneAmount(t, sharesByTxn, person)
+      const signed = t.kind === 'income' ? amount : -amount
+      netByMonth.set(key, (netByMonth.get(key) ?? 0) + signed)
+    }
+    return months.map((m) => ({ month: m, net: netByMonth.get(m) ?? 0 }))
+  }, [transactions, categories, shares, person, months])
+
+  const peak = Math.max(...rows.map((r) => Math.abs(r.net)), 1)
+
+  return (
+    <div className="flex items-end justify-between gap-2 px-1 pb-1" style={{ height: '4.5rem' }}>
+      {rows.map((row) => {
+        const heightPct = Math.max(4, (Math.abs(row.net) / peak) * 100)
+        const isCurrent = row.month === month
+        return (
+          <div key={row.month} className="flex flex-1 flex-col items-center gap-1">
+            <div className="flex h-12 w-full items-end justify-center">
+              <div
+                className={cn('w-full max-w-6 rounded-t-sm', row.net >= 0 ? 'bg-good' : 'bg-destructive', isCurrent && 'opacity-100', !isCurrent && 'opacity-60')}
+                style={{ height: `${heightPct}%` }}
+                title={`${monthLabel(row.month)}: ${formatBaht(row.net)}`}
+              />
+            </div>
+            <span className={cn('text-[10px]', isCurrent ? 'font-medium text-foreground' : 'text-muted-foreground')}>
+              {monthLabel(row.month).slice(0, 3)}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 interface Props {
@@ -181,8 +275,15 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
         </div>
       )}
 
+      <div className="rounded-2xl border bg-card px-3 pt-2">
+        <p className="text-xs text-muted-foreground">Last {TREND_MONTHS} months</p>
+        <MonthTrendChart householdId={householdId} month={month} person={person} />
+      </div>
+
       {categoryRows.length > 0 && (
         <div className="space-y-1.5">
+          <CategoryDonut rows={categoryRows} total={categoryTotal} />
+
           <button
             type="button"
             onClick={() => setCategoriesOpen((open) => !open)}
