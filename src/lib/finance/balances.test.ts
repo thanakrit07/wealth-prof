@@ -7,6 +7,7 @@ import {
   creditAvailable,
   memberNetWorth,
   newestAnchor,
+  setAside,
 } from './balances'
 
 const A = 'member-a'
@@ -24,6 +25,8 @@ const card = (over: Partial<Parameters<typeof cardOutstanding>[0]> = {}) => ({
   id: 'card-1',
   owner_id: A,
   credit_limit: 50000,
+  statement_day: 20,
+  due_day: 5,
   ...over,
 })
 
@@ -211,6 +214,53 @@ describe('creditAvailable', () => {
     const c = card({ credit_limit: 10000 })
     const txns = [txn({ kind: 'expense', amount: 4000, from_card_id: 'card-1' })]
     expect(creditAvailable(c, txns)).toBe(6000)
+  })
+})
+
+describe('setAside', () => {
+  // statement_day 20, due_day 5 — cycle A: 2025-12-06..2026-01-05, due
+  // 2026-01-20. cycle B: 2026-01-06..2026-02-05, due 2026-02-20. "today"
+  // sits inside cycle B, so cycle A is the most recently closed one.
+  const c = card()
+  const today = '2026-01-10'
+
+  it('is the closed cycle\'s bill when nothing has been paid toward it', () => {
+    const txns = [txn({ kind: 'expense', amount: 1000, from_card_id: 'card-1', date: '2025-12-10' })]
+    expect(setAside(c, txns, [], new Set(), null, today)).toBe(1000)
+  })
+
+  it('subtracts a payment dated after the cycle closed, in the cycle it settles', () => {
+    const txns = [
+      txn({ kind: 'expense', amount: 1000, from_card_id: 'card-1', date: '2025-12-10' }),
+      // Dated inside cycle B's window, same as a real due-date payment would be.
+      txn({ kind: 'transfer', amount: 400, to_card_id: 'card-1', date: '2026-01-08' }),
+    ]
+    expect(setAside(c, txns, [], new Set(), null, today)).toBe(600)
+  })
+
+  it('never goes below zero when the payment overshoots the bill', () => {
+    const txns = [
+      txn({ kind: 'expense', amount: 1000, from_card_id: 'card-1', date: '2025-12-10' }),
+      txn({ kind: 'transfer', amount: 1500, to_card_id: 'card-1', date: '2026-01-08' }),
+    ]
+    expect(setAside(c, txns, [], new Set(), null, today)).toBe(0)
+  })
+
+  it('ignores charges in the still-open cycle — nothing about it is due yet', () => {
+    const txns = [
+      txn({ kind: 'expense', amount: 1000, from_card_id: 'card-1', date: '2025-12-10' }),
+      // Inside cycle B, which hasn't closed as of `today`.
+      txn({ kind: 'expense', amount: 500, from_card_id: 'card-1', date: '2026-01-07' }),
+    ]
+    expect(setAside(c, txns, [], new Set(), null, today)).toBe(1000)
+  })
+
+  it('ignores an unconfirmed payment', () => {
+    const txns = [
+      txn({ kind: 'expense', amount: 1000, from_card_id: 'card-1', date: '2025-12-10' }),
+      txn({ kind: 'transfer', amount: 1000, to_card_id: 'card-1', date: '2026-01-08', confirmed: false }),
+    ]
+    expect(setAside(c, txns, [], new Set(), null, today)).toBe(1000)
   })
 })
 

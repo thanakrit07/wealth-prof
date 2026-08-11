@@ -3,7 +3,7 @@
 // separate from billingCycle.ts because the two figures deliberately use
 // different time windows — see the account/card asymmetry below.
 
-import { addDays } from './billingCycle.ts'
+import { addDays, closedCycleAsOf, cycleBill, type InstallmentLike } from './billingCycle.ts'
 
 export interface AccountLike {
   id: string
@@ -16,6 +16,8 @@ export interface CardLike {
   id: string
   owner_id: string | null
   credit_limit: number
+  statement_day: number
+  due_day: number
 }
 
 export interface TransactionLike {
@@ -138,6 +140,36 @@ export function cardOutstanding(card: CardLike, transactions: TransactionLike[])
 
 export function creditAvailable(card: CardLike, transactions: TransactionLike[]): number {
   return card.credit_limit - cardOutstanding(card, transactions)
+}
+
+// §6.3c/ADR-0012: the cash a card's most recently closed bill still needs,
+// not what it owes in total (cardOutstanding, deliberately unbounded) or
+// what it charged (cycleBill, deliberately excludes payments). An open
+// cycle is never counted — nothing about it is due yet, so a card between
+// statements contributes ฿0 here even though it already owes something.
+//
+// `installments` and `postedPeriods` should already be filtered/scoped the
+// way every other cycleBill caller does (CardCycleSummary, CardForecastTab):
+// installments to this card's active plans, postedPeriods household-wide.
+// No `recurringRules` — the closed cycle is entirely in the past, so
+// anything recurring inside it has already materialised into a real
+// transaction; projecting it again would double it.
+export function setAside(
+  card: CardLike,
+  transactions: TransactionLike[],
+  installments: InstallmentLike[],
+  postedPeriods: ReadonlySet<string>,
+  adjustment: number | null,
+  today: string,
+): number {
+  const closed = closedCycleAsOf(card, today)
+  const cardTxns = transactions.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id)
+  const bill = cycleBill({ cycle: closed, cardId: card.id, transactions: cardTxns, installments, adjustment, postedPeriods })
+  const paid = transactions
+    .filter((t) => t.confirmed && t.kind === 'transfer' && t.to_card_id === card.id)
+    .filter((t) => t.date > closed.end && t.date <= today)
+    .reduce((sum, t) => sum + t.amount, 0)
+  return Math.max(0, bill - paid)
 }
 
 // D19: money − card debt + what others owe this member − what this member

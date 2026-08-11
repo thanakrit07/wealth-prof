@@ -14,9 +14,11 @@ import { Switch } from '@/components/ui/switch'
 import { OwnerSelect } from '@/components/OwnerSelect'
 import { useAccounts, useCreateAccount, useUpdateAccount, type Account, type AccountType } from '@/lib/accounts'
 import { adjustmentCategory } from '@/lib/balanceAdjustments'
+import { useCardCycleAdjustments, type CardCycleAdjustment } from '@/lib/cardCycleAdjustments'
 import { useCards, useCreateCard, useUpdateCard, type Card } from '@/lib/cards'
 import { useCategories, type Category } from '@/lib/categories'
-import { accountBalance, cardOutstanding, memberNetWorth } from '@/lib/finance/balances'
+import { accountBalance, cardOutstanding, memberNetWorth, setAside } from '@/lib/finance/balances'
+import { closedCycleAsOf, cycleBill } from '@/lib/finance/billingCycle'
 import type { PersonFilter } from '@/lib/filters'
 import { useHousehold } from '@/lib/HouseholdContext'
 import {
@@ -26,6 +28,7 @@ import {
   type InstrumentKind,
 } from '@/lib/instruments'
 import { formatBaht } from '@/lib/format'
+import { useInstallments, usePostedPeriods, type Installment } from '@/lib/installments'
 import { dayMonthLabel } from '@/lib/month'
 import { useCreateTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
@@ -60,6 +63,27 @@ function lastConfirmedDate(account: Account, transactions: Transaction[]): strin
 // Net worth needs the whole ledger, not a windowed slice like every other
 // screen's month/cycle range.
 const ALL_TIME = { start: '2000-01-01', end: '2100-01-01' }
+
+// §6.3c/ADR-0012: a card row leads with its most recently closed Cycle
+// Bill and when it's due, not capacity — this computes that pair the same
+// way CardCycleSummary and CardForecastTab do (same cycleBill call, so the
+// three screens can't disagree). `postedPeriods` and `adjustments` are
+// household-wide; installments get filtered to this card's active plans.
+function closedBillFor(
+  card: Card,
+  transactions: Transaction[],
+  installments: Installment[],
+  postedPeriods: ReadonlySet<string>,
+  adjustments: CardCycleAdjustment[],
+  today: string,
+) {
+  const closed = closedCycleAsOf(card, today)
+  const cardTxns = transactions.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id)
+  const cardInstallments = installments.filter((i) => i.card_id === card.id && i.status === 'active')
+  const adjustment = adjustments.find((a) => a.card_id === card.id && a.cycle_start === closed.start)?.amount ?? null
+  const bill = cycleBill({ cycle: closed, cardId: card.id, transactions: cardTxns, installments: cardInstallments, adjustment, postedPeriods })
+  return { bill, dueDate: closed.dueDate, cardInstallments, adjustment }
+}
 
 // D-0004: debts and their repayment history live here, not on Records —
 // what one person owes another is a current-state figure like an account
@@ -198,6 +222,11 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   const { data: transactions } = useTransactions(householdId, ALL_TIME)
   const { data: categories } = useCategories(householdId)
   const { data: debts } = useUnsettledShares(householdId)
+  // §6.3c: everything cycleBill needs, so a card row can lead with its
+  // closed cycle's bill instead of capacity.
+  const { data: installments } = useInstallments(householdId)
+  const { data: postedPeriods } = usePostedPeriods(householdId)
+  const { data: cardCycleAdjustments } = useCardCycleAdjustments(householdId)
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
   const [reconciling, setReconciling] = useState<Account | null>(null)
@@ -209,6 +238,14 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   const allCards = cards ?? []
   const allTxns = transactions ?? []
   const allDebts = debts ?? []
+  const allInstallments = installments ?? []
+  const allAdjustments = cardCycleAdjustments ?? []
+  const postedPeriodKeys = postedPeriods?.keys ?? new Set<string>()
+
+  function setAsideFor(card: Card) {
+    const { cardInstallments, adjustment } = closedBillFor(card, allTxns, allInstallments, postedPeriodKeys, allAdjustments, today)
+    return setAside(card, allTxns, cardInstallments, postedPeriodKeys, adjustment, today)
+  }
 
   // D18: a Common Pot has no owner and no per-person breakdown, so it sits
   // outside every filter below — every person filter sees it, and it is
@@ -224,6 +261,13 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   // ledger for someone who never opens the Between-us section.
   const visibleAccounts = person === 'all' ? allAccounts : allAccounts.filter((a) => a.owner_id === person)
   const visibleCards = person === 'all' ? allCards : allCards.filter((c) => c.owner_id === person)
+  const ownedAccounts = visibleAccounts.filter((a) => a.owner_id !== null)
+  const ownedCards = visibleCards.filter((c) => c.owner_id !== null)
+
+  // §6.3c: Accounts totals money held; Credit cards totals Set Aside — read
+  // as a pair, "this is what we have, this is what is already spoken for."
+  const accountsTotal = ownedAccounts.reduce((sum, a) => sum + accountBalance(a, allTxns, today), 0)
+  const cardsSetAsideTotal = ownedCards.reduce((sum, c) => sum + setAsideFor(c), 0)
 
   const netWorthRows = members.map((m) => ({
     member: m,
@@ -260,6 +304,11 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
         </div>
       )}
 
+      {/* Between Us holds the only pending action on this screen (Settle
+          up) and renders nothing when no one owes anyone, so promoting it
+          above the instrument sections costs nothing on a quiet day. */}
+      <BetweenUsSection />
+
       {(potAccounts.length > 0 || potCards.length > 0) && (
         <section className="space-y-2">
           <div className="flex items-center justify-between">
@@ -279,16 +328,21 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
                 onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
               />
             ))}
-            {potCards.map((card) => (
-              <CardRow
-                key={card.id}
-                card={card}
-                outstanding={cardOutstanding(card, allTxns)}
-                onOpen={() => !card.archived && onOpenCard(card.id)}
-                onEdit={() => setEditingCard(card)}
-                onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
-              />
-            ))}
+            {potCards.map((card) => {
+              const { bill, dueDate } = closedBillFor(card, allTxns, allInstallments, postedPeriodKeys, allAdjustments, today)
+              return (
+                <CardRow
+                  key={card.id}
+                  card={card}
+                  bill={bill}
+                  dueDate={dueDate}
+                  outstanding={cardOutstanding(card, allTxns)}
+                  onOpen={() => !card.archived && onOpenCard(card.id)}
+                  onEdit={() => setEditingCard(card)}
+                  onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
+                />
+              )
+            })}
           </ul>
         </section>
       )}
@@ -296,60 +350,61 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
-          <Button size="sm" variant="outline" onClick={() => setEditingAccount('new')}>
-            <Plus className="size-4" />
-            Add
-          </Button>
+          <div className="flex items-center gap-2">
+            {ownedAccounts.length > 0 && <span className="text-sm font-medium">{formatBaht(accountsTotal)}</span>}
+            <Button size="sm" variant="outline" onClick={() => setEditingAccount('new')}>
+              <Plus className="size-4" />
+              Add
+            </Button>
+          </div>
         </div>
         <ul className="space-y-1">
-          {visibleAccounts
-            .filter((a) => a.owner_id !== null)
-            .map((account) => (
-              <AccountRow
-                key={account.id}
-                account={account}
-                balance={accountBalance(account, allTxns, today)}
-                lastConfirmedDate={lastConfirmedDate(account, allTxns)}
-                onOpen={() => onOpenAccount(account.id)}
-                onEdit={() => setEditingAccount(account)}
-                onReconcile={() => setReconciling(account)}
-                onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
-              />
-            ))}
-          {visibleAccounts.filter((a) => a.owner_id !== null).length === 0 && (
-            <p className="text-sm text-muted-foreground">No accounts yet.</p>
-          )}
+          {ownedAccounts.map((account) => (
+            <AccountRow
+              key={account.id}
+              account={account}
+              balance={accountBalance(account, allTxns, today)}
+              lastConfirmedDate={lastConfirmedDate(account, allTxns)}
+              onOpen={() => onOpenAccount(account.id)}
+              onEdit={() => setEditingAccount(account)}
+              onReconcile={() => setReconciling(account)}
+              onDelete={() => setDeleting({ kind: 'account', id: account.id, name: account.name })}
+            />
+          ))}
+          {ownedAccounts.length === 0 && <p className="text-sm text-muted-foreground">No accounts yet.</p>}
         </ul>
       </section>
 
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-muted-foreground">Credit cards</h2>
-          <Button size="sm" variant="outline" onClick={() => setEditingCard('new')}>
-            <Plus className="size-4" />
-            Add
-          </Button>
+          <div className="flex items-center gap-2">
+            {ownedCards.length > 0 && <span className="text-sm font-medium">{formatBaht(cardsSetAsideTotal)} set aside</span>}
+            <Button size="sm" variant="outline" onClick={() => setEditingCard('new')}>
+              <Plus className="size-4" />
+              Add
+            </Button>
+          </div>
         </div>
         <ul className="space-y-1">
-          {visibleCards
-            .filter((c) => c.owner_id !== null)
-            .map((card) => (
+          {ownedCards.map((card) => {
+            const { bill, dueDate } = closedBillFor(card, allTxns, allInstallments, postedPeriodKeys, allAdjustments, today)
+            return (
               <CardRow
                 key={card.id}
                 card={card}
+                bill={bill}
+                dueDate={dueDate}
                 outstanding={cardOutstanding(card, allTxns)}
                 onOpen={() => !card.archived && onOpenCard(card.id)}
                 onEdit={() => setEditingCard(card)}
                 onDelete={() => setDeleting({ kind: 'card', id: card.id, name: card.name })}
               />
-            ))}
-          {visibleCards.filter((c) => c.owner_id !== null).length === 0 && (
-            <p className="text-sm text-muted-foreground">No cards yet.</p>
-          )}
+            )
+          })}
+          {ownedCards.length === 0 && <p className="text-sm text-muted-foreground">No cards yet.</p>}
         </ul>
       </section>
-
-      <BetweenUsSection />
 
       {editingAccount && (
         <AccountDialog
@@ -430,12 +485,18 @@ function AccountRow({
 
 function CardRow({
   card,
+  bill,
+  dueDate,
   outstanding,
   onOpen,
   onEdit,
   onDelete,
 }: {
   card: Card
+  // §6.3c/ADR-0012: the row's own question is "what's due next", not
+  // capacity — outstanding/left below are the secondary line now.
+  bill: number
+  dueDate: string
   outstanding: number
   onOpen: () => void
   onEdit: () => void
@@ -450,11 +511,14 @@ function CardRow({
             onClick={onOpen}
             className={card.archived ? 'flex-1 truncate text-left text-muted-foreground line-through' : 'flex-1 truncate text-left'}
           >
-            {card.name}
+            <span className="block truncate">{card.name}</span>
+            <span className="block truncate text-xs text-muted-foreground">
+              {formatBaht(outstanding)} owed · {formatBaht(available)} left
+            </span>
           </button>
-          <span className="text-right text-muted-foreground">
-            <span className="block">{formatBaht(outstanding)} owed</span>
-            <span className="block text-xs">{formatBaht(available)} left</span>
+          <span className="shrink-0 text-right">
+            <span className="block">{formatBaht(bill)}</span>
+            <span className="block text-xs text-muted-foreground">due {dayMonthLabel(dueDate)}</span>
           </span>
           <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} aria-label="Edit">
             <Pencil className="size-3.5" />
