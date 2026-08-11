@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRightLeft, CalendarSync, Repeat, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -36,6 +36,7 @@ import {
   type TransactionKind,
 } from '@/lib/transactions'
 import { invalidateShareQueries, syncTransactionShares, useTransactionShares } from '@/lib/transactionShares'
+import { cn } from '@/lib/utils'
 import { InstallmentSheet } from '@/features/installments/InstallmentSheet'
 import { RecurringRuleSheet } from '@/features/plan/RecurringRuleSheet'
 
@@ -129,6 +130,21 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   // not a filtered one, or it would silently fall back to the "Choose a
   // category" placeholder.
   const selectedCategory: Category | null = categoryId ? ((categories ?? []).find((c) => c.id === categoryId) ?? null) : null
+
+  // v3.9 (F): recent-category chips. A one-tap shortcut for the common case
+  // (this month's coffee is the same category, same card, as last month's)
+  // — selectCategory already sets the last-used instrument alongside the
+  // category, so a chip tap does the work of two rows at once. Never the
+  // only way in: the Category row and its full grid stay exactly as they
+  // were for anything not in the top six (D17 — no row loses its access
+  // just because a shortcut exists for the common case).
+  const recentCategories = useMemo(() => {
+    if (!usage) return []
+    return (categories ?? [])
+      .filter((c) => !c.archived && !c.system && c.kind === kind && (usage.counts.get(c.id) ?? 0) > 0)
+      .sort((a, b) => (usage.counts.get(b.id) ?? 0) - (usage.counts.get(a.id) ?? 0))
+      .slice(0, 6)
+  }, [usage, categories, kind])
 
   function instrumentLabel(instrument: Instrument): string {
     if (instrument.accountId) return accounts?.find((a) => a.id === instrument.accountId)?.name ?? '…'
@@ -325,6 +341,25 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           active={panel.active === 'amount'}
           onActivate={() => panel.toggle('amount')}
         />
+
+        {kind !== 'transfer' && recentCategories.length > 0 && (
+          <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-0.5">
+            {recentCategories.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => selectCategory(c)}
+                className={cn(
+                  'flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors',
+                  categoryId === c.id ? 'border-primary bg-primary/10' : 'border-border active:bg-accent',
+                )}
+              >
+                <CategoryIcon icon={c.icon} color={c.color} className="size-3.5 shrink-0" />
+                <span className="whitespace-nowrap">{c.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         <Tabs value={kind} onValueChange={(v) => changeKind(v as TransactionKind)}>
           <TabsList className="w-full">
