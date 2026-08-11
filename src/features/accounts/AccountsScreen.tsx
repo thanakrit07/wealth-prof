@@ -29,7 +29,7 @@ import {
 } from '@/lib/instruments'
 import { formatBaht } from '@/lib/format'
 import { useInstallments, usePostedPeriods, type Installment } from '@/lib/installments'
-import { dayMonthLabel } from '@/lib/month'
+import { ALL_TIME, dayMonthLabel } from '@/lib/month'
 import { useCreateTransaction, useTransactions, useUnconfirmedTransactions, type Transaction } from '@/lib/transactions'
 import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
@@ -57,12 +57,6 @@ function lastConfirmedDate(account: Account, transactions: Transaction[]): strin
   }
   return latest
 }
-
-// Wide enough to hold every real row (anchor dates in the past) and every
-// installment period already posted ahead (ADR-0001 — years, not months).
-// Net worth needs the whole ledger, not a windowed slice like every other
-// screen's month/cycle range.
-const ALL_TIME = { start: '2000-01-01', end: '2100-01-01' }
 
 // §6.3c/ADR-0012: a card row leads with its most recently closed Cycle
 // Bill and when it's due, not capacity — this computes that pair the same

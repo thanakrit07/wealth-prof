@@ -52,3 +52,10 @@ export function monthRange(monthKey: string): { start: string; end: string } {
     end: format(endOfMonth(date), 'yyyy-MM-dd'),
   }
 }
+
+// Wide enough to hold every real row (anchor dates in the past) and every
+// installment period already posted ahead (ADR-0001 — years, not months).
+// A shared literal, not just a shared shape: every screen that fetches "the
+// whole ledger" keys `useTransactions` on this exact object, so they all
+// share one cached request instead of each firing its own.
+export const ALL_TIME = { start: '2000-01-01', end: '2100-01-01' }

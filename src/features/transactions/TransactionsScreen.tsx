@@ -13,7 +13,7 @@ import { useInstrumentNames } from '@/lib/instruments'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { borneAmount, matchesPersonFilter, sharesByTransaction, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
-import { dayOfMonthLabel, monthRange, weekdayLabel } from '@/lib/month'
+import { ALL_TIME, dayOfMonthLabel, fullDateLabel, monthRange, weekdayLabel } from '@/lib/month'
 import { supabase } from '@/lib/supabase'
 import { parsePeriodSourceKey } from '@/lib/installmentMaterialiser'
 import { useInstallmentPayments, useSetPeriodPaid } from '@/lib/installments'
@@ -57,9 +57,14 @@ export function TransactionsScreen({
   onClearCard,
 }: Props) {
   const { householdId, members } = useHousehold()
+  // v3.9: search leaves the month. It used to just filter whatever the
+  // month fetch happened to hold, so a query for something recorded in a
+  // different month silently came back empty — indistinguishable from
+  // "you never did that". An active query fetches the whole ledger instead.
+  const isSearching = search.trim().length > 0
   const range = useMemo(
-    () => (cardCycle ? { start: cardCycle.start, end: cardCycle.end } : monthRange(month)),
-    [month, cardCycle],
+    () => (isSearching ? ALL_TIME : cardCycle ? { start: cardCycle.start, end: cardCycle.end } : monthRange(month)),
+    [month, cardCycle, isSearching],
   )
   const { data: transactions } = useTransactions(householdId, range)
   const { data: categories } = useCategories(householdId)
@@ -177,7 +182,7 @@ export function TransactionsScreen({
           summary can't push the first transaction off the screen. On
           desktop this same component renders in AppShell's summary column
           instead (App.tsx), so it isn't rendered twice. */}
-      {!isDesktop && <RecordsSummary month={month} person={person} card={card} cardCycle={cardCycle} />}
+      {!isDesktop && !isSearching && <RecordsSummary month={month} person={person} card={card} cardCycle={cardCycle} />}
 
       <ReviewStrip onEdit={setEditing} />
       {filterCategory && (
@@ -208,7 +213,9 @@ export function TransactionsScreen({
           <X className="size-3" aria-label="Clear card filter" />
         </button>
       )}
-      {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this month.</p>}
+      {groups.length === 0 && (
+        <p className="text-sm text-muted-foreground">{isSearching ? 'No matches.' : 'No transactions this month.'}</p>
+      )}
       {/* One continuous ledger rather than a card per row (Money Manager
           density): day headers carry that day's totals, and hairline
           dividers replace the per-row borders and gaps. */}
@@ -219,10 +226,16 @@ export function TransactionsScreen({
           return (
             <div key={date} className={groupIndex > 0 ? 'border-t' : undefined}>
               <div className="flex items-center gap-2 bg-muted/50 px-3 py-1">
-                <span className="text-sm font-semibold tabular-nums">{dayOfMonthLabel(date)}</span>
-                <span className="rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground">
-                  {weekdayLabel(date)}
-                </span>
+                {isSearching ? (
+                  <span className="text-sm font-semibold tabular-nums">{fullDateLabel(date)}</span>
+                ) : (
+                  <>
+                    <span className="text-sm font-semibold tabular-nums">{dayOfMonthLabel(date)}</span>
+                    <span className="rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground">
+                      {weekdayLabel(date)}
+                    </span>
+                  </>
+                )}
                 <span className="ml-auto flex items-center gap-3 text-[11px] tabular-nums">
                   {dayIncome > 0 && (
                     <span className="text-good">{formatBaht(dayIncome)}</span>

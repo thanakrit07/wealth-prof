@@ -112,7 +112,7 @@ function SignedInApp({ self }: { self: HouseholdMember }) {
             : null
         }
         aside={
-          isDesktop && resolvedTab === 'records' ? (
+          isDesktop && resolvedTab === 'records' && !search.trim() ? (
             <SummaryColumn>
               <RecordsSummary month={month} person={person as PersonFilter} card={activeCard} cardCycle={activeCycle} />
             </SummaryColumn>

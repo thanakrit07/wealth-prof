@@ -13,7 +13,7 @@ import { accountBalance } from '@/lib/finance/balances'
 import { sharesByTransaction } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
-import { currentMonthKey, dayOfMonthLabel, monthLabel, monthRange, shiftMonth, weekdayLabel } from '@/lib/month'
+import { ALL_TIME, currentMonthKey, dayOfMonthLabel, monthLabel, monthRange, shiftMonth, weekdayLabel } from '@/lib/month'
 import { useTransactionShares } from '@/lib/transactionShares'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
@@ -22,13 +22,6 @@ import { TransactionSheet } from '@/features/transactions/TransactionSheet'
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
-
-// Wide enough to hold every transaction ever posted against this account —
-// only for the balance headline, which (like accountBalance everywhere
-// else) needs the whole ledger, not the month currently shown below. Same
-// queryKey as AccountsScreen's own ALL_TIME fetch, so this is cache reuse,
-// not a second round-trip, for anyone who opened Balances first.
-const ALL_TIME = { start: '2000-01-01', end: '2100-01-01' }
 
 interface Props {
   accountId: string

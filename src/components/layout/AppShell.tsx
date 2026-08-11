@@ -119,6 +119,11 @@ export function AppShell({
                   <ChevronRight className="size-4" />
                 </Button>
               </div>
+            ) : isRecords && search.trim() ? (
+              // v3.9: search leaves the month, so the month nav isn't the
+              // subject while a query is running — swapped for a plain
+              // label rather than arrows that no longer mean anything.
+              <h1 className="font-heading text-base font-semibold">Search results</h1>
             ) : isRecords ? (
               <div className="flex items-center gap-1">
                 <Button variant="ghost" size="icon" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Previous month">
