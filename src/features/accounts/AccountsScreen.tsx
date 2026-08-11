@@ -30,7 +30,7 @@ import {
 import { formatBaht } from '@/lib/format'
 import { useInstallments, usePostedPeriods, type Installment } from '@/lib/installments'
 import { dayMonthLabel } from '@/lib/month'
-import { useCreateTransaction, useTransactions, type Transaction } from '@/lib/transactions'
+import { useCreateTransaction, useTransactions, useUnconfirmedTransactions, type Transaction } from '@/lib/transactions'
 import { useSettlements, useUndoRepayment, useUnsettledShares } from '@/lib/transactionShares'
 import { cn } from '@/lib/utils'
 import { SettleUpSheet } from '@/features/home/SettleUpSheet'
@@ -227,6 +227,10 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   const { data: installments } = useInstallments(householdId)
   const { data: postedPeriods } = usePostedPeriods(householdId)
   const { data: cardCycleAdjustments } = useCardCycleAdjustments(householdId)
+  // §6.6/v3.9: generated rows awaiting review are excluded from every figure
+  // on this screen, so it has to say so — otherwise every balance here is
+  // quietly understated the moment a subscription materialises.
+  const { data: pendingReview } = useUnconfirmedTransactions(householdId)
   const [editingAccount, setEditingAccount] = useState<Account | 'new' | null>(null)
   const [editingCard, setEditingCard] = useState<Card | 'new' | null>(null)
   const [reconciling, setReconciling] = useState<Account | null>(null)
@@ -275,6 +279,7 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
   }))
   const householdNetWorth = netWorthRows.reduce((sum, r) => sum + r.amount, 0)
   const headlineNetWorth = person === 'all' ? householdNetWorth : (netWorthRows.find((r) => r.member.id === person)?.amount ?? 0)
+  const pendingReviewTotal = (pendingReview ?? []).reduce((sum, t) => sum + t.amount, 0)
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
@@ -291,6 +296,12 @@ export function AccountsScreen({ person, onOpenAccount, onOpenCard }: Props) {
           <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', netWorthOpen && 'rotate-180')} />
         )}
       </button>
+
+      {pendingReview && pendingReview.length > 0 && (
+        <p className="px-1 text-xs text-muted-foreground">
+          {formatBaht(pendingReviewTotal)} awaiting review, not counted above.
+        </p>
+      )}
 
       {person === 'all' && netWorthOpen && netWorthRows.length > 0 && (
         <div className="divide-y rounded-2xl border bg-card">

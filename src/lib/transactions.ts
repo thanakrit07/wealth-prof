@@ -148,6 +148,23 @@ export function useConfirmTransaction(householdId: string) {
   })
 }
 
+// v3.9: a fixed-amount subscription has nothing to review, so the strip can
+// clear itself in one tap instead of one-by-one.
+export function useConfirmAllTransactions(householdId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from('transactions')
+        .update({ confirmed: true })
+        .eq('household_id', householdId)
+        .eq('confirmed', false)
+      if (error) throw error
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions', householdId] }),
+  })
+}
+
 export function useDeleteTransaction(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({

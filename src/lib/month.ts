@@ -27,6 +27,13 @@ export function dayMonthLabel(date: string): string {
   return format(parse(date, 'yyyy-MM-dd', new Date()), 'd MMM')
 }
 
+// "20 Jul 2569" — for dates that can't assume the current year, like a
+// review row generated ahead of schedule.
+export function fullDateLabel(date: string): string {
+  const parsed = parse(date, 'yyyy-MM-dd', new Date())
+  return `${format(parsed, 'd MMM')} ${toBuddhistYear(parsed.getFullYear())}`
+}
+
 // "20" and "Mon" — the two halves of a day-group header in the ledger.
 export function dayOfMonthLabel(date: string): string {
   return format(parse(date, 'yyyy-MM-dd', new Date()), 'd')

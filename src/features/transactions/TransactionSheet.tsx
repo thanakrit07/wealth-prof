@@ -68,7 +68,10 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
   const create = useCreateTransaction(householdId)
   const update = useUpdateTransaction(householdId)
   const remove = useDeleteTransaction(householdId)
-  const panel = useEntryPanel<PanelKey>()
+  // v3.9: the amount keypad opens on mount — it's the one field every entry
+  // fills in, so it shouldn't cost a tap to reach. Editing an existing row
+  // starts with no panel open since the amount is already set.
+  const panel = useEntryPanel<PanelKey>(transaction ? null : 'amount')
 
   const [kind, setKind] = useState<TransactionKind>(transaction?.kind ?? 'expense')
   const amountField = useAmountEntry(transaction ? String(transaction.amount) : '')
@@ -157,7 +160,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   function resetForNextEntry() {
     amountField.reset()
-    panel.close()
+    panel.open('amount')
     setDescription('')
     setNote('')
     setCategoryId(null)

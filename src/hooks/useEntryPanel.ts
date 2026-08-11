@@ -5,11 +5,12 @@ import { useState } from 'react'
 // closes whichever other one was open — there is never more than one panel
 // kind active at a time — and focusing a free-text field (Note, Details)
 // closes it outright by calling `close`.
-export function useEntryPanel<T extends string>() {
-  const [active, setActive] = useState<T | null>(null)
+export function useEntryPanel<T extends string>(initial: T | null = null) {
+  const [active, setActive] = useState<T | null>(initial)
   return {
     active,
     close: () => setActive(null),
+    open: (key: T) => setActive(key),
     toggle: (key: T) => setActive((prev) => (prev === key ? null : key)),
   }
 }
