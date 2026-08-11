@@ -35,7 +35,7 @@ import {
   type TransactionInput,
   type TransactionKind,
 } from '@/lib/transactions'
-import { syncTransactionShares, useTransactionShares } from '@/lib/transactionShares'
+import { invalidateShareQueries, syncTransactionShares, useTransactionShares } from '@/lib/transactionShares'
 import { InstallmentSheet } from '@/features/installments/InstallmentSheet'
 import { RecurringRuleSheet } from '@/features/plan/RecurringRuleSheet'
 
@@ -226,11 +226,13 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
         // Saving an unconfirmed (generated) row counts as reviewing it.
         await update.mutateAsync({ id: transaction.id, input, confirm: !transaction.confirmed })
         await syncTransactionShares({ ...shareParams, transactionId: transaction.id })
+        invalidateShareQueries(queryClient, householdId)
         onOpenChange(false)
         return
       }
       const id = await create.mutateAsync(input)
       await syncTransactionShares({ ...shareParams, transactionId: id })
+      invalidateShareQueries(queryClient, householdId)
       resetForNextEntry()
       onOpenChange(false)
       toast.success('Transaction saved', {

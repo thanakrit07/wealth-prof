@@ -181,7 +181,12 @@ export async function syncTransactionShares(params: {
 
 const SHARE_KEYS = ['transaction_shares', 'unsettled_shares', 'settlements'] as const
 
-function invalidateShareQueries(queryClient: ReturnType<typeof useQueryClient>, householdId: string) {
+// Exported for syncTransactionShares' own callers: that function is a plain
+// async write, not a mutation hook, so it can't invalidate its own cache —
+// the caller has to, or the split rows it just wrote are invisible (no
+// "shared with" dots, no unsettled total) until something unrelated
+// happens to refetch the query, e.g. switching tabs.
+export function invalidateShareQueries(queryClient: ReturnType<typeof useQueryClient>, householdId: string) {
   for (const key of SHARE_KEYS) queryClient.invalidateQueries({ queryKey: [key, householdId] })
   // A repayment or an exemption toggle is itself a transactions write, so the
   // ledger and any screen reading it (day totals, card cycles) must refresh.
