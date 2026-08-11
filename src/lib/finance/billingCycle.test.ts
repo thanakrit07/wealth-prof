@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  closedCycleAsOf,
   cycleBill,
   cycleDueInMonth,
   cycleOf,
@@ -70,6 +71,30 @@ describe('cycleOf', () => {
     const cycle = cycleOf(card, '2026-01-06')
     expect(cycle.start).toBe('2026-01-06')
     expect(cycle.end).toBe('2026-02-05')
+  })
+})
+
+describe('closedCycleAsOf', () => {
+  const card = { statement_day: 5, due_day: 20 }
+  // Cycle A: 2025-12-06 – 2026-01-05, due 2026-01-20.
+  // Cycle B: 2026-01-06 – 2026-02-05, due 2026-02-20.
+
+  it('attributes a payment made on the due date to the cycle that is due, not the cycle its date falls inside', () => {
+    // 2026-01-20 (cycle A's due date) is inside cycle B's window — the bug
+    // this exists to fix would have attributed the payment to cycle B.
+    expect(closedCycleAsOf(card, '2026-01-20').start).toBe('2025-12-06')
+  })
+
+  it('attributes a payment made exactly on the closing statement day to the cycle that just closed', () => {
+    expect(closedCycleAsOf(card, '2026-01-05')).toEqual(cycleOf(card, '2026-01-05'))
+  })
+
+  it('attributes a payment made the day after close to the cycle that just closed, not the new one that just started', () => {
+    expect(closedCycleAsOf(card, '2026-01-06').start).toBe('2025-12-06')
+  })
+
+  it('attributes a payment made well into the next cycle to the same most-recently-closed cycle', () => {
+    expect(closedCycleAsOf(card, '2026-01-15').start).toBe('2025-12-06')
   })
 })
 
@@ -225,15 +250,23 @@ describe('cycleBill', () => {
 
   it('sums card transactions in the cycle, excludes transfers paying it off', () => {
     const transactions = [
-      { amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null },
-      { amount: 300, date: '2026-01-20', kind: 'expense' as const, to_card_id: null },
+      { amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null, confirmed: true },
+      { amount: 300, date: '2026-01-20', kind: 'expense' as const, to_card_id: null, confirmed: true },
       // A transfer TO this card is a bill payment — it settles the bill,
       // not a charge on it (D7).
-      { amount: 800, date: '2026-01-25', kind: 'transfer' as const, to_card_id: cardId },
+      { amount: 800, date: '2026-01-25', kind: 'transfer' as const, to_card_id: cardId, confirmed: true },
       // Outside the cycle window.
-      { amount: 999, date: '2026-02-10', kind: 'expense' as const, to_card_id: null },
+      { amount: 999, date: '2026-02-10', kind: 'expense' as const, to_card_id: null, confirmed: true },
     ]
     expect(cycleBill({ cycle, cardId, transactions, installments: [] })).toBe(800)
+  })
+
+  it('excludes unconfirmed rows — they are excluded from every total in the app (§6.6), not just the callers that remember to filter', () => {
+    const transactions = [
+      { amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null, confirmed: true },
+      { amount: 999, date: '2026-01-12', kind: 'expense' as const, to_card_id: null, confirmed: false },
+    ]
+    expect(cycleBill({ cycle, cardId, transactions, installments: [] })).toBe(500)
   })
 
   it('adds installment charges falling in the cycle', () => {
@@ -246,7 +279,7 @@ describe('cycleBill', () => {
   })
 
   it('combines transactions, installments, and the adjustment', () => {
-    const transactions = [{ amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null }]
+    const transactions = [{ amount: 500, date: '2026-01-10', kind: 'expense' as const, to_card_id: null, confirmed: true }]
     const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
     expect(cycleBill({ cycle, cardId, transactions, installments, adjustment: 50 })).toBe(750)
   })
@@ -254,7 +287,7 @@ describe('cycleBill', () => {
   it('does not double-count a period already posted as a transaction (D11)', () => {
     // The materialiser already turned period 1 into a real transaction on
     // the card — it must appear in txnTotal only, not in both terms.
-    const transactions = [{ amount: 200, date: '2026-01-06', kind: 'expense' as const, to_card_id: null }]
+    const transactions = [{ amount: 200, date: '2026-01-06', kind: 'expense' as const, to_card_id: null, confirmed: true }]
     const installments = [{ id: 'inst-1', start_date: '2026-01-06', total_periods: 3, monthly_amount: 200, final_amount: null }]
     expect(cycleBill({ cycle, cardId, transactions, installments, postedPeriods: new Set(['inst-1:1']) })).toBe(200)
   })

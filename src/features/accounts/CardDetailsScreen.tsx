@@ -46,6 +46,17 @@ export function CardDetailsScreen({ cardId, onClose }: Props) {
   const cycle = card ? cycleOf(card, anchor) : null
   const range = cycle ? { start: cycle.start, end: cycle.end } : { start: anchor, end: anchor }
   const { data: cycleTxns } = useTransactions(householdId, range)
+  // CardCycleSummary's paidSoFar needs to see a payment settling this cycle
+  // even though it's dated after this cycle closes (bills fall due only
+  // once the cycle is over) — widened just for that, not for `range`
+  // itself, so the ledger list below still shows only this cycle's own
+  // transactions.
+  // Not memoized, matching `range` above — useTransactions keys its query
+  // on the start/end strings, not this object's identity, so there's
+  // nothing an identity-stable reference would buy here.
+  const paymentSearchRange =
+    card && cycle ? { start: cycle.start, end: cycleOf(card, addDays(cycle.end, 1)).end } : range
+  const { data: widerCycleTxns } = useTransactions(householdId, paymentSearchRange)
   const categoryById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c])), [categories])
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
   const sharesByTxn = useMemo(() => sharesByTransaction(shares), [shares])
@@ -53,6 +64,13 @@ export function CardDetailsScreen({ cardId, onClose }: Props) {
   const items = useMemo(
     () => (cycleTxns ?? []).filter((t) => t.confirmed && (t.from_card_id === cardId || t.to_card_id === cardId)),
     [cycleTxns, cardId],
+  )
+  // For CardCycleSummary only — includes the extra days past cycle close
+  // where a payment settling it actually lands. cycleBill filters its own
+  // date range internally, so the wider set doesn't change the bill total.
+  const widerItems = useMemo(
+    () => (widerCycleTxns ?? []).filter((t) => t.confirmed && (t.from_card_id === cardId || t.to_card_id === cardId)),
+    [widerCycleTxns, cardId],
   )
 
   const groups = useMemo(() => {
@@ -91,7 +109,7 @@ export function CardDetailsScreen({ cardId, onClose }: Props) {
       }
     >
       <div className="mx-auto max-w-2xl space-y-3 p-4">
-        <CardCycleSummary card={card} cycle={cycle} cycleTransactions={items} />
+        <CardCycleSummary card={card} cycle={cycle} cycleTransactions={widerItems} />
 
         {groups.length === 0 && <p className="text-sm text-muted-foreground">No transactions this cycle.</p>}
 

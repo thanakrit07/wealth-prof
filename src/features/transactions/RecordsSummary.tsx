@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { effectiveMainId, useCategories, type Category } from '@/lib/categories'
 import type { Card } from '@/lib/cards'
-import type { Cycle } from '@/lib/finance/billingCycle'
+import { addDays, cycleOf, type Cycle } from '@/lib/finance/billingCycle'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { borneAmount, matchesPersonFilter, sharesByTransaction, type PersonFilter } from '@/lib/filters'
 import { formatBaht } from '@/lib/format'
@@ -43,7 +43,18 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
     () => (cardCycle ? { start: cardCycle.start, end: cardCycle.end } : monthRange(month)),
     [month, cardCycle],
   )
+  // CardCycleSummary's paidSoFar needs to see a payment settling this
+  // cycle even though it's dated after this cycle closes (bills fall due
+  // only once the cycle is over) — widened just for that fetch, not for
+  // range itself, so the ledger list TransactionsScreen renders alongside
+  // this still shows only what actually happened in this cycle.
+  const paymentSearchRange = useMemo(() => {
+    if (!cardCycle || !card) return range
+    const nextCycle = cycleOf(card, addDays(cardCycle.end, 1))
+    return { start: cardCycle.start, end: nextCycle.end }
+  }, [cardCycle, card, range])
   const { data: transactions } = useTransactions(householdId, range)
+  const { data: widerTransactions } = useTransactions(householdId, paymentSearchRange)
   const { data: categories } = useCategories(householdId)
   const { data: shares } = useTransactionShares(householdId)
   const [summaryOpen, setSummaryOpen] = useState(false)
@@ -59,9 +70,18 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
     () => (transactions ?? []).filter((t) => t.confirmed && !categoryById.get(t.category_id ?? '')?.system),
     [transactions, categoryById],
   )
+  // Sourced from the wider fetch (paymentSearchRange), not `confirmed`, so
+  // a payment dated after this cycle closes — where one settling this
+  // cycle's bill almost always lands — is actually there for
+  // CardCycleSummary's paidSoFar to find.
   const cardTransactions = useMemo(
-    () => (card ? confirmed.filter((t) => t.from_card_id === card.id || t.to_card_id === card.id) : []),
-    [card, confirmed],
+    () =>
+      card
+        ? (widerTransactions ?? [])
+            .filter((t) => t.confirmed && !categoryById.get(t.category_id ?? '')?.system)
+            .filter((t) => t.from_card_id === card.id || t.to_card_id === card.id)
+        : [],
+    [card, widerTransactions, categoryById],
   )
 
   const filtered = useMemo(

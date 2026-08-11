@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSetCardCycleAdjustment, useCardCycleAdjustments } from '@/lib/cardCycleAdjustments'
-import { cycleBill, type Cycle } from '@/lib/finance/billingCycle'
+import { closedCycleAsOf, cycleBill, type Cycle } from '@/lib/finance/billingCycle'
 import { formatBaht } from '@/lib/format'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { useInstallments, usePostedPeriods } from '@/lib/installments'
@@ -17,7 +17,14 @@ import { cn } from '@/lib/utils'
 interface Props {
   card: Card
   cycle: Cycle
-  /** Already scoped to this cycle's date range by the caller (TransactionsScreen). */
+  /**
+   * Scoped by the caller (RecordsSummary) to this cycle's own window
+   * *plus* enough of the following cycle to catch a payment made after
+   * this one closes — which is where a payment settling this cycle's bill
+   * almost always lands, since bills fall due only after their cycle
+   * closes. `cycleBill`'s own date filter still bounds the charge total to
+   * exactly this cycle regardless of how wide this list is.
+   */
   cycleTransactions: Transaction[]
 }
 
@@ -51,8 +58,13 @@ export function CardCycleSummary({ card, cycle, cycleTransactions }: Props) {
     postedPeriods: postedPeriods?.keys,
     recurringRules: rules ?? [],
   })
+  // A payment settles whichever cycle had most recently closed when it was
+  // made, not the cycle its own date falls inside — due dates land after
+  // the cycle closes, so attributing by window (what this used to do)
+  // showed "฿0 paid" on bills that had been settled in full.
   const paidSoFar = cycleTransactions
-    .filter((t) => t.kind === 'transfer' && t.to_card_id === card.id)
+    .filter((t) => t.confirmed && t.kind === 'transfer' && t.to_card_id === card.id)
+    .filter((t) => closedCycleAsOf(card, t.date).start === cycle.start)
     .reduce((sum, t) => sum + t.amount, 0)
   const utilization = card.credit_limit > 0 ? Math.min(100, (bill / card.credit_limit) * 100) : 0
 

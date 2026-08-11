@@ -94,6 +94,27 @@ export function addDays(date: string, delta: number): string {
   return iso(d.getFullYear(), d.getMonth(), d.getDate())
 }
 
+/**
+ * Which cycle a payment dated `date` settles: the most recently *closed*
+ * cycle as of that date, not the cycle `date` itself falls inside.
+ *
+ * A bill becomes due only after its cycle closes, so the transfer that
+ * pays it off is dated in the *following* cycle's window almost every
+ * time — `cycleOf(date)` would attribute it there instead of to the bill
+ * it actually settles, which is why a fully-paid cycle could still read
+ * "฿0 paid" (CardCycleSummary's `paidSoFar`).
+ *
+ * `cycleOf` always returns the cycle whose end is on or after `date`
+ * (never before), so the cycle that's actually closed as of `date` is
+ * either that same cycle — if `date` lands exactly on its closing
+ * statement day — or the one immediately before it.
+ */
+export function closedCycleAsOf(card: CardLike, date: string): Cycle {
+  const containing = cycleOf(card, date)
+  if (date === containing.end) return containing
+  return cycleOf(card, addDays(containing.start, -1))
+}
+
 function addOneDay(date: string): string {
   return addDays(date, 1)
 }
@@ -148,6 +169,7 @@ export interface TransactionChargeLike {
   date: string
   kind: 'income' | 'expense' | 'transfer'
   to_card_id: string | null
+  confirmed: boolean
 }
 
 /** A recurring rule, structurally — `RecurringRule` from lib/recurring.ts fits. */
@@ -215,6 +237,11 @@ export interface CycleBillInput {
  * separate source of charges, and a caller silently omitting one produces a
  * plausible-looking but wrong number (this already happened once with
  * `postedPeriods`, which double-counted posted installment periods).
+ *
+ * Unconfirmed rows are excluded here rather than trusted to every caller —
+ * they're excluded from every other total in the app (§6.6), and one call
+ * site (CardCycleSummary) never filtered them at all before this, letting
+ * a still-pending generated row inflate a real bill.
  */
 export function cycleBill({
   cycle,
@@ -226,6 +253,7 @@ export function cycleBill({
   recurringRules,
 }: CycleBillInput): number {
   const txnTotal = transactions
+    .filter((t) => t.confirmed)
     .filter((t) => t.date >= cycle.start && t.date <= cycle.end)
     .filter((t) => !(t.kind === 'transfer' && t.to_card_id === cardId))
     .reduce((sum, t) => sum + t.amount, 0)
