@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCardCycleAdjustments } from '@/lib/cardCycleAdjustments'
 import { useCards } from '@/lib/cards'
@@ -36,9 +35,11 @@ function rollingMonths(): string[] {
 // bill across every card) so the whole thing scrolls vertically on a phone;
 // tapping a month opens the per-card breakdown.
 //
-// A future cycle has no recorded transactions yet, so its number is
-// *committed* charges only — installment periods plus projected recurring
-// charges — never a forecast of discretionary spending. The UI says so.
+// A future cycle has no recorded transactions yet, so its number splits in
+// two: Posted (installment periods — a real row in the ledger, unescapable)
+// and Projected (recurring charges — cancellable tomorrow, rarely the same
+// amount twice). Both show at once rather than behind a toggle, because the
+// gap between them is the most useful thing on the screen.
 export function CardForecastTab() {
   const { householdId } = useHousehold()
   const { data: cards } = useCards(householdId)
@@ -47,7 +48,6 @@ export function CardForecastTab() {
   const { data: adjustments } = useCardCycleAdjustments(householdId)
   const { data: rules } = useRecurringRules(householdId)
 
-  const [includeRecurring, setIncludeRecurring] = useState(true)
   const [openMonth, setOpenMonth] = useState<string | null>(currentMonthKey())
   const [view, setView] = useState<ViewWindow>('recent')
 
@@ -92,6 +92,14 @@ export function CardForecastTab() {
           )
           const cardInstallments = (installments ?? []).filter((i) => i.card_id === card.id && i.status === 'active')
           const adjustment = (adjustments ?? []).find((a) => a.card_id === card.id && a.cycle_start === cycle.start)
+          const posted = cycleBill({
+            cycle,
+            cardId: card.id,
+            transactions: cardTxns,
+            installments: cardInstallments,
+            adjustment: adjustment?.amount ?? null,
+            postedPeriods: postedPeriods.keys,
+          })
           const bill = cycleBill({
             cycle,
             cardId: card.id,
@@ -99,15 +107,21 @@ export function CardForecastTab() {
             installments: cardInstallments,
             adjustment: adjustment?.amount ?? null,
             postedPeriods: postedPeriods.keys,
-            recurringRules: includeRecurring ? (rules ?? []) : undefined,
+            recurringRules: rules ?? [],
           })
-          return { card, cycle, bill }
+          return { card, cycle, posted, projected: bill - posted, bill }
         })
         .filter((cell) => cell.bill > 0)
         .sort((a, b) => (a.cycle.dueDate < b.cycle.dueDate ? -1 : 1))
-      return { month, cards, total: cards.reduce((sum, c) => sum + c.bill, 0) }
+      return {
+        month,
+        cards,
+        posted: cards.reduce((sum, c) => sum + c.posted, 0),
+        projected: cards.reduce((sum, c) => sum + c.projected, 0),
+        total: cards.reduce((sum, c) => sum + c.bill, 0),
+      }
     })
-  }, [grid, transactions, installments, adjustments, postedPeriods, rules, includeRecurring])
+  }, [grid, transactions, installments, adjustments, postedPeriods, rules])
 
   const peak = Math.max(...rows.map((r) => r.total), 0)
 
@@ -136,22 +150,13 @@ export function CardForecastTab() {
         </Select>
       </div>
 
-      <div className="flex items-center justify-between rounded-xl border bg-card p-3">
-        <div className="min-w-0 pr-3">
-          <p className="text-sm">Include recurring</p>
-          <p className="text-xs text-muted-foreground">
-            Subscriptions and bills charged to a card, projected from their schedule
-          </p>
-        </div>
-        <Switch checked={includeRecurring} onCheckedChange={setIncludeRecurring} aria-label="Include recurring charges" />
-      </div>
-
       <ul className="space-y-1.5">
-        {rows.map(({ month, cards, total }) => {
+        {rows.map(({ month, cards, posted, projected, total }) => {
           const isOpen = openMonth === month
           const isPeak = total > 0 && total === peak
-          // Past cycles are settled fact; future ones are committed charges
-          // only. Same number, very different meaning — so the list says which.
+          // Past cycles are settled fact. Future ones split Posted (installment
+          // periods, unescapable) from Projected (recurring, cancellable) —
+          // same total, very different meaning, so the row shows both.
           const isPast = month < currentMonthKey()
           return (
             <li key={month} className="overflow-hidden rounded-xl border bg-card">
@@ -169,7 +174,10 @@ export function CardForecastTab() {
                     highest
                   </span>
                 )}
-                <span className={cn('shrink-0', total === 0 && 'text-muted-foreground')}>{formatBaht(total)}</span>
+                <span className={cn('shrink-0', total === 0 && 'text-muted-foreground')}>
+                  {formatBaht(posted)}
+                  {projected > 0 && <span className="text-muted-foreground"> + {formatBaht(projected)}</span>}
+                </span>
                 <ChevronDown
                   className={cn('size-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-180')}
                 />
@@ -177,7 +185,7 @@ export function CardForecastTab() {
 
               {isOpen && (
                 <ul className="divide-y border-t">
-                  {cards.map(({ card, cycle, bill }) => (
+                  {cards.map(({ card, cycle, posted: cardPosted, projected: cardProjected }) => (
                     <li key={card.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                       <span className="min-w-0 flex-1">
                         <span className="block truncate">{card.name}</span>
@@ -185,7 +193,10 @@ export function CardForecastTab() {
                           {dayMonthLabel(cycle.start)} – {dayMonthLabel(cycle.end)} · due {dayMonthLabel(cycle.dueDate)}
                         </span>
                       </span>
-                      <span className="shrink-0">{formatBaht(bill)}</span>
+                      <span className="shrink-0">
+                        {formatBaht(cardPosted)}
+                        {cardProjected > 0 && <span className="text-muted-foreground"> + {formatBaht(cardProjected)}</span>}
+                      </span>
                     </li>
                   ))}
                   {cards.length === 0 && (
@@ -203,8 +214,9 @@ export function CardForecastTab() {
           Desktop has no floating FAB (AppShell's rail has "New record"
           instead), so the clearance isn't needed there. */}
       <p className="pr-20 text-xs text-muted-foreground lg:pr-0">
-        Past months show what was actually charged. Future months count committed charges only — installment
-        periods and recurring rules — so day-to-day spending that hasn't happened yet is not included.
+        Past months show what was actually charged. Future months split Posted (installment periods — unescapable)
+        and Projected (recurring charges — cancellable) — day-to-day spending that hasn't happened yet is never
+        included.
       </p>
     </div>
   )
