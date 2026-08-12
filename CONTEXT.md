@@ -51,7 +51,8 @@ _Avoid_: type, direction
 
 **Origin**:
 What caused a Transaction to exist: entered by hand, generated from a Recurring
-Rule, generated from an Installment Plan, or brought in by the sheet import.
+Rule, generated from an Installment Plan, written by a Reconcile, or brought in
+by the one-time import of the household's old Google Sheet.
 Independent of Kind — a salary is both recurring and income.
 _Avoid_: source (that word already means the paying Instrument), reason
 

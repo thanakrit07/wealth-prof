@@ -119,6 +119,14 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   const [detailsOpen, setDetailsOpen] = useState(Boolean(transaction?.description))
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // How many rows this run of "Save & add" has written. The quick-add sheet
+  // is mounted for the life of the app with `open` toggling (App.tsx), not
+  // remounted per use, so this has to be cleared by hand — otherwise the
+  // next trip through the FAB inherits the last one's tally.
+  const [savedCount, setSavedCount] = useState(0)
+  useEffect(() => {
+    if (!open) setSavedCount(0)
+  }, [open])
   // Once the user picks an instrument by hand (or is editing an existing
   // row), category taps must stop auto-overriding it.
   const [fromTouched, setFromTouched] = useState(Boolean(transaction))
@@ -174,6 +182,11 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     }
   }
 
+  // Clears what changes row to row and deliberately keeps what doesn't: the
+  // date and the paying Instrument stay put, because several rows entered in
+  // one sitting are nearly always the same day on the same card. Who bears is
+  // *not* sticky — inheriting "split evenly" onto the next row would quietly
+  // create a Debt nobody asked for, and D13 exists to make sharing deliberate.
   function resetForNextEntry() {
     amountField.reset()
     panel.open('amount')
@@ -196,7 +209,7 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
     }
   }
 
-  async function handleSave() {
+  async function handleSave({ keepOpen = false }: { keepOpen?: boolean } = {}) {
     // The Who-bears panel is the Split's single source of truth now (D13):
     // "Just you" writes no rows at all — the not-a-debt case — "Split
     // evenly" and the one-tap "entirely theirs" (sole) are both computed
@@ -250,6 +263,17 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
       await syncTransactionShares({ ...shareParams, transactionId: id })
       invalidateShareQueries(queryClient, householdId)
       resetForNextEntry()
+      if (keepOpen) {
+        // Rapid entry: stay on the form, with the amount keypad already
+        // reopened by resetForNextEntry, so the next row costs an amount and
+        // a category and nothing else. No toast — one per row would stack up
+        // over the very keypad the next row is about to be typed on, and it
+        // would time out just when you looked away. The count in the header
+        // says the same thing and stays said. Undo is still a swipe on the
+        // row in Records.
+        setSavedCount((n) => n + 1)
+        return
+      }
       onOpenChange(false)
       toast.success('Transaction saved', {
         action: {
@@ -277,10 +301,19 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   if (!open) return null
 
+  // The running tally lives in the header because the footer is the keypad
+  // for most of a rapid-entry run — resetForNextEntry reopens it — so it is
+  // the one spot that stays visible between rows.
+  const title = transaction
+    ? 'Edit transaction'
+    : savedCount > 0
+      ? `Add transaction · ${savedCount} added`
+      : 'Add transaction'
+
   return (
     <>
       <EntryPage
-        title={transaction ? 'Edit transaction' : 'Add transaction'}
+        title={title}
         onClose={() => onOpenChange(false)}
         panelOpen={panel.active !== null}
         footer={
@@ -328,7 +361,18 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
                   <Trash2 className="size-4" />
                 </Button>
               )}
-              <Button className="flex-1" onClick={handleSave} disabled={!canSave || create.isPending || update.isPending}>
+              {/* Only when adding: an edit has one row by definition. */}
+              {!transaction && (
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => handleSave({ keepOpen: true })}
+                  disabled={!canSave || create.isPending}
+                >
+                  Save &amp; add
+                </Button>
+              )}
+              <Button className="flex-1" onClick={() => handleSave()} disabled={!canSave || create.isPending || update.isPending}>
                 Save
               </Button>
             </div>
