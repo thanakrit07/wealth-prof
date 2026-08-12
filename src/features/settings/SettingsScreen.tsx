@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { FullScreenPage } from '@/components/FullScreenPage'
 import { CategoriesScreen } from '@/features/categories/CategoriesScreen'
 import { ChangePasswordDialog } from '@/features/settings/ChangePasswordDialog'
+import { ImportScreen } from '@/features/settings/ImportScreen'
 import { InviteSection } from '@/features/settings/InviteSection'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { clearPersistedCache } from '@/lib/queryClient'
@@ -47,6 +48,7 @@ function ThemeToggle() {
 export function SettingsScreen() {
   const { self, members } = useHousehold()
   const [categoriesOpen, setCategoriesOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
 
   // Clear the local cache first: signing out re-renders into the auth screen,
@@ -76,9 +78,14 @@ export function SettingsScreen() {
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">Data</h2>
-        <Button variant="outline" onClick={() => setCategoriesOpen(true)}>
-          Manage categories
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setCategoriesOpen(true)}>
+            Manage categories
+          </Button>
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            Import
+          </Button>
+        </div>
       </section>
 
       <section className="space-y-2">
@@ -103,6 +110,12 @@ export function SettingsScreen() {
       {categoriesOpen && (
         <FullScreenPage title="Categories" onClose={() => setCategoriesOpen(false)}>
           <CategoriesScreen />
+        </FullScreenPage>
+      )}
+
+      {importOpen && (
+        <FullScreenPage title="Import" onClose={() => setImportOpen(false)}>
+          <ImportScreen onClose={() => setImportOpen(false)} />
         </FullScreenPage>
       )}
 
