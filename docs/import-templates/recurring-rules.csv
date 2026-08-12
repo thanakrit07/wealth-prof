@@ -1,0 +1,3 @@
+Name,Kind,Amount,Category,Frequency,Interval,Day of month,Weekday,Month of year,Month-end rule,Start date,End date,Account or card,To account or card,Auto-post,Variable amount,Last generated date,Owner,Note,Active
+Netflix,expense,350,Subscriptions,monthly,,15,,,,15/01/2026,,Card •• 1234,,,,,,,
+Netflix,expense,350,,monthly,,,,,,15/01/2026,,Card •• 1234,,,,,,,
