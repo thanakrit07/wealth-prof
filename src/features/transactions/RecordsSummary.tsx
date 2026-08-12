@@ -19,10 +19,24 @@ interface MainRow {
   subs: { category: Category; total: number }[]
 }
 
+// A category's colour, as spent by the donut — falls back to the palette
+// (by rank, not id, so it's stable within one render but not a permanent
+// per-category assignment) when the category itself has none set. This is
+// the single source for that fallback: the donut's ring and the list row
+// right next to it both call this, so a slice's colour and its row's dot
+// are guaranteed to be the same value, never two independent computations
+// that happen to agree.
+function categoryColor(row: MainRow, index: number): string {
+  return row.main.color ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length]
+}
+
 // F (redesign plan): a category donut, CSS conic-gradient rather than a
 // charting library — the prototype's own read was that the simple case
 // needs no dependency, and a ring is exactly that case. Reuses
-// categoryRows/categoryTotal, so it's always in sync with the list below it.
+// categoryRows/categoryTotal, so it's always in sync with the list it sits
+// inside. No separate legend: a colour that isn't on `category.color`
+// exists nowhere else in the app, so the only trustworthy legend is the
+// list itself, sitting right underneath and carrying the matching dot.
 function CategoryDonut({ rows, total }: { rows: MainRow[]; total: number }) {
   const stops = useMemo(() => {
     if (total <= 0) return []
@@ -31,7 +45,7 @@ function CategoryDonut({ rows, total }: { rows: MainRow[]; total: number }) {
       const pct = (row.total / total) * 100
       const start = cursor
       cursor += pct
-      return { color: row.main.color ?? CATEGORY_COLORS[i % CATEGORY_COLORS.length], start, end: cursor }
+      return { color: categoryColor(row, i), start, end: cursor }
     })
   }, [rows, total])
 
@@ -282,8 +296,6 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
 
       {categoryRows.length > 0 && (
         <div className="space-y-1.5">
-          <CategoryDonut rows={categoryRows} total={categoryTotal} />
-
           <button
             type="button"
             onClick={() => setCategoriesOpen((open) => !open)}
@@ -295,18 +307,26 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
           </button>
 
           {categoriesOpen && (
-            <ul className="space-y-1.5">
-              {categoryRows.map(({ main, total, subs }) => {
-                const isExpanded = expandedMainId === main.id
-                return (
-                  <li key={main.id} className="space-y-1">
-                    <div className="space-y-1.5 rounded-xl border bg-card px-3 py-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="flex min-w-0 flex-1 items-center gap-2">
-                          <CategoryIcon icon={main.icon} color={main.color} className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="flex-1 truncate">{main.name}</span>
-                          <span>{formatBaht(total)}</span>
-                        </span>
+            <>
+              {/* Nested inside Categories, not floating above it — its
+                  colours only mean anything next to the list carrying the
+                  matching dots, so it opens and closes with that list. */}
+              <CategoryDonut rows={categoryRows} total={categoryTotal} />
+
+              <ul className="space-y-1.5">
+                {categoryRows.map(({ main, total, subs }, i) => {
+                  const isExpanded = expandedMainId === main.id
+                  const dotColor = categoryColor({ main, total, subs }, i)
+                  return (
+                    <li key={main.id} className="space-y-1">
+                      <div className="space-y-1.5 rounded-xl border bg-card px-3 py-2">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
+                            <CategoryIcon icon={main.icon} color={main.color} className="size-4 shrink-0 text-muted-foreground" />
+                            <span className="flex-1 truncate">{main.name}</span>
+                            <span>{formatBaht(total)}</span>
+                          </span>
                         {subs.length > 0 && (
                           <button
                             onClick={() => setExpandedMainId(isExpanded ? null : main.id)}
@@ -338,7 +358,8 @@ export function RecordsSummary({ month, person, card, cardCycle }: Props) {
                   </li>
                 )
               })}
-            </ul>
+              </ul>
+            </>
           )}
         </div>
       )}
