@@ -1,18 +1,30 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronDown, Download, Upload, X } from 'lucide-react'
+import { ChevronDown, Download, Trash2, Undo2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useAccounts } from '@/lib/accounts'
 import { useCards } from '@/lib/cards'
 import { useCategories } from '@/lib/categories'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { applyPlan, hasExistingImportRows, type ApplyProgress, type ApplyResult, type ApplyStage } from '@/lib/import/apply'
-import { detectMapping, type ColumnMapping } from '@/lib/import/detect'
+import { detectMapping, mapRow, type ColumnMapping } from '@/lib/import/detect'
+import type { FieldSpec } from '@/lib/import/fields'
 import { ENTITY_LABELS, FIELD_SPECS } from '@/lib/import/fields'
 import { parseCsvText, type ParsedCsv } from '@/lib/import/parseCsv'
 import { buildPlan, type FilesInput } from '@/lib/import/plan'
 import { buildTemplateCsv } from '@/lib/import/template'
-import { emptyRowEdits, ENTITY_KINDS, type DateFormat, type EntityKind, type ImportContext, type ImportIssue, type ImportPlan } from '@/lib/import/types'
+import {
+  editKey,
+  emptyRowEdits,
+  ENTITY_KINDS,
+  type DateFormat,
+  type EntityKind,
+  type ImportContext,
+  type ImportIssue,
+  type ImportPlan,
+  type RowEdits,
+} from '@/lib/import/types'
 import { cn } from '@/lib/utils'
 
 function todayIso(): string {
@@ -54,6 +66,7 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
   const [parsedByEntity, setParsedByEntity] = useState<Partial<Record<EntityKind, ParsedCsv>>>({})
   const [mappingByEntity, setMappingByEntity] = useState<Partial<Record<EntityKind, ColumnMapping>>>({})
   const [dateFormat, setDateFormat] = useState<DateFormat>('dmy')
+  const [edits, setEdits] = useState<RowEdits>(emptyRowEdits())
   const [existingImportWarning, setExistingImportWarning] = useState(false)
   const [checkingExisting, setCheckingExisting] = useState(false)
   const [applyProgress, setApplyProgress] = useState<ApplyProgress | null>(null)
@@ -61,9 +74,14 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
 
   const context: ImportContext = useMemo(
     () => ({
-      categories: (categories ?? []).map((c) => ({ name: c.name, kind: c.kind })),
-      accounts: (accounts ?? []).map((a) => ({ name: a.name })),
-      cards: (cards ?? []).map((c) => ({ name: c.name })),
+      // System and archived categories are excluded from every category
+      // picker in the app (CategoryPickerPanel) — an import shouldn't be
+      // able to offer or accept one either.
+      categories: (categories ?? []).filter((c) => !c.system && !c.archived).map((c) => ({ name: c.name, kind: c.kind })),
+      // Archived accounts/cards are excluded the same way
+      // InstrumentPickerPanel excludes them everywhere else in the app.
+      accounts: (accounts ?? []).filter((a) => !a.archived).map((a) => ({ name: a.name })),
+      cards: (cards ?? []).filter((c) => !c.archived).map((c) => ({ name: c.name })),
       members: members.map((m) => ({ name: m.display_name })),
     }),
     [categories, accounts, cards, members],
@@ -83,12 +101,33 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
   }, [parsedByEntity, mappingByEntity, selectedEntities.join(',')])
 
   const plan: ImportPlan = useMemo(
-    () => buildPlan(files, emptyRowEdits(), context, dateFormat, todayIso()),
-    [files, context, dateFormat],
+    () => buildPlan(files, edits, context, dateFormat, todayIso()),
+    [files, edits, context, dateFormat],
   )
 
   const errorCount = plan.issues.filter((i) => i.severity === 'error').length
   const warningCount = plan.issues.filter((i) => i.severity === 'warning').length
+
+  // Editing or deleting a row changes what other rows resolve against (a
+  // renamed account, a deleted category another row named as its parent),
+  // so the whole plan is rebuilt from `edits` on every change rather than
+  // patched — see plan.ts's own note on this.
+  function setOverride(entity: EntityKind, rowNumber: number, field: string, value: string) {
+    setEdits((prev) => {
+      const key = editKey(entity, rowNumber)
+      return { ...prev, overrides: { ...prev.overrides, [key]: { ...prev.overrides[key], [field]: value } } }
+    })
+  }
+
+  function setDeleted(entity: EntityKind, rowNumber: number, deleted: boolean) {
+    setEdits((prev) => {
+      const key = editKey(entity, rowNumber)
+      const next = new Set(prev.deleted)
+      if (deleted) next.add(key)
+      else next.delete(key)
+      return { ...prev, deleted: next }
+    })
+  }
 
   async function handleFileChange(entity: EntityKind, file: File | null) {
     if (!file) {
@@ -158,6 +197,11 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
       {stage === 'preview' && (
         <PreviewStep
           plan={plan}
+          context={context}
+          files={files}
+          edits={edits}
+          onEdit={setOverride}
+          onSetDeleted={setDeleted}
           selectedEntities={selectedEntities}
           errorCount={errorCount}
           warningCount={warningCount}
@@ -365,6 +409,11 @@ function IssueList({ issues }: { issues: ImportIssue[] }) {
 
 function PreviewStep({
   plan,
+  context,
+  files,
+  edits,
+  onEdit,
+  onSetDeleted,
   selectedEntities,
   errorCount,
   warningCount,
@@ -373,6 +422,11 @@ function PreviewStep({
   onApply,
 }: {
   plan: ImportPlan
+  context: ImportContext
+  files: FilesInput
+  edits: RowEdits
+  onEdit: (entity: EntityKind, rowNumber: number, field: string, value: string) => void
+  onSetDeleted: (entity: EntityKind, rowNumber: number, deleted: boolean) => void
   selectedEntities: EntityKind[]
   errorCount: number
   warningCount: number
@@ -405,24 +459,18 @@ function PreviewStep({
         </div>
       )}
 
-      {selectedEntities.map((entity) => {
-        const rows = plan[entity]
-        const entityIssues = plan.issues.filter((i) => i.entity === entity)
-        const errors = entityIssues.filter((i) => i.severity === 'error')
-        const validCount = rows.filter((r) => r.value !== null).length
-        return (
-          <div key={entity} className="space-y-1.5 rounded-2xl border bg-card p-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">{ENTITY_LABELS[entity]}</span>
-              <span className="text-muted-foreground">
-                {validCount}/{rows.length} row{rows.length === 1 ? '' : 's'} ready
-                {errors.length > 0 && <span className="text-destructive"> · {errors.length} error{errors.length === 1 ? '' : 's'}</span>}
-              </span>
-            </div>
-            {entityIssues.length > 0 && <IssueList issues={entityIssues} />}
-          </div>
-        )
-      })}
+      {selectedEntities.map((entity) => (
+        <EntitySection
+          key={entity}
+          entity={entity}
+          plan={plan}
+          context={context}
+          fileInput={files[entity]!}
+          edits={edits}
+          onEdit={onEdit}
+          onSetDeleted={onSetDeleted}
+        />
+      ))}
 
       <div className="flex gap-2">
         <Button variant="outline" className="flex-1" onClick={onBack}>
@@ -432,6 +480,171 @@ function PreviewStep({
           Import
         </Button>
       </div>
+    </div>
+  )
+}
+
+// Reads back from `plan` (post-edit) for a live row, but a deleted row is
+// absent from `plan` entirely — mapRow against the original file is the only
+// way left to show it (struck through, with Undo), which is the whole point
+// of keeping delete reversible instead of forgetting the row outright.
+function displayRawFor(entity: EntityKind, rowNumber: number, plan: ImportPlan, fileInput: FilesInput[EntityKind]): Record<string, string> {
+  const planned = (plan[entity] as { rowNumber: number; raw: Record<string, string> }[]).find((r) => r.rowNumber === rowNumber)
+  if (planned) return planned.raw
+  const csvRow = fileInput!.rows[rowNumber - 1]
+  return mapRow(csvRow, fileInput!.mapping, FIELD_SPECS[entity])
+}
+
+function referenceOptions(entity: EntityKind, field: FieldSpec, raw: Record<string, string>, context: ImportContext, plan: ImportPlan): string[] | null {
+  if (field.type === 'enum') return field.enumValues ? [...field.enumValues] : null
+  if (field.type === 'member-ref') return context.members.map((m) => m.name)
+  if (field.type === 'instrument-ref') {
+    const planAccounts = plan.accounts.map((r) => r.value).filter((v) => v !== null).map((v) => v.name)
+    const planCards = plan.cards.map((r) => r.value).filter((v) => v !== null).map((v) => v.name)
+    return [...new Set([...context.accounts.map((a) => a.name), ...planAccounts, ...context.cards.map((c) => c.name), ...planCards])]
+  }
+  if (field.type === 'category-ref') {
+    const kind: 'income' | 'expense' = entity === 'installments' ? 'expense' : raw.kind?.trim().toLowerCase() === 'income' ? 'income' : 'expense'
+    const planCategories = plan.categories
+      .map((r) => r.value)
+      .filter((v) => v !== null)
+      .filter((c) => c.kind === kind)
+      .map((c) => c.name)
+    return [...new Set([...context.categories.filter((c) => c.kind === kind).map((c) => c.name), ...planCategories])]
+  }
+  return null
+}
+
+function EntitySection({
+  entity,
+  plan,
+  context,
+  fileInput,
+  edits,
+  onEdit,
+  onSetDeleted,
+}: {
+  entity: EntityKind
+  plan: ImportPlan
+  context: ImportContext
+  fileInput: FilesInput[EntityKind]
+  edits: RowEdits
+  onEdit: (entity: EntityKind, rowNumber: number, field: string, value: string) => void
+  onSetDeleted: (entity: EntityKind, rowNumber: number, deleted: boolean) => void
+}) {
+  const [rowsOpen, setRowsOpen] = useState(false)
+  const [issuesOnly, setIssuesOnly] = useState(false)
+
+  const rows = plan[entity] as { rowNumber: number; raw: Record<string, string>; value: unknown }[]
+  const entityIssues = plan.issues.filter((i) => i.entity === entity)
+  const errors = entityIssues.filter((i) => i.severity === 'error')
+  const totalRows = fileInput?.rows.length ?? 0
+  const deletedCount = Array.from({ length: totalRows }, (_, i) => i + 1).filter((n) => edits.deleted.has(editKey(entity, n))).length
+  const validCount = rows.filter((r) => r.value !== null).length
+
+  const visibleRowNumbers = Array.from({ length: totalRows }, (_, i) => i + 1).filter((rowNumber) => {
+    if (!issuesOnly) return true
+    const deleted = edits.deleted.has(editKey(entity, rowNumber))
+    if (deleted) return false
+    return entityIssues.some((i) => i.rowNumber === rowNumber)
+  })
+
+  return (
+    <div className="space-y-1.5 rounded-2xl border bg-card p-3">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium">{ENTITY_LABELS[entity]}</span>
+        <span className="text-muted-foreground">
+          {validCount}/{totalRows} ready
+          {errors.length > 0 && <span className="text-destructive"> · {errors.length} error{errors.length === 1 ? '' : 's'}</span>}
+          {deletedCount > 0 && <span> · {deletedCount} deleted</span>}
+        </span>
+      </div>
+
+      <button type="button" onClick={() => setRowsOpen((o) => !o)} className="flex items-center gap-1 text-xs text-muted-foreground">
+        <ChevronDown className={cn('size-3.5 transition-transform', rowsOpen && 'rotate-180')} />
+        {rowsOpen ? 'Hide rows' : `Show rows (${totalRows})`}
+      </button>
+
+      {rowsOpen && (
+        <div className="space-y-2">
+          {entityIssues.length > 0 && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input type="checkbox" checked={issuesOnly} onChange={(e) => setIssuesOnly(e.target.checked)} />
+              Show only rows with issues
+            </label>
+          )}
+          <ul className="space-y-2">
+            {visibleRowNumbers.map((rowNumber) => {
+              const key = editKey(entity, rowNumber)
+              const deleted = edits.deleted.has(key)
+              const raw = displayRawFor(entity, rowNumber, plan, fileInput)
+              const rowIssues = entityIssues.filter((i) => i.rowNumber === rowNumber)
+              return (
+                <li key={rowNumber} className={cn('space-y-1.5 rounded-xl border p-2', deleted ? 'bg-muted/40 opacity-60' : 'bg-background')}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">Row {rowNumber}</span>
+                    {deleted ? (
+                      <Button variant="ghost" size="sm" className="h-6 gap-1 px-1.5 text-xs" onClick={() => onSetDeleted(entity, rowNumber, false)}>
+                        <Undo2 className="size-3" />
+                        Undo
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 gap-1 px-1.5 text-xs text-destructive hover:text-destructive"
+                        onClick={() => onSetDeleted(entity, rowNumber, true)}
+                      >
+                        <Trash2 className="size-3" />
+                        Delete
+                      </Button>
+                    )}
+                  </div>
+                  {!deleted && (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {FIELD_SPECS[entity].map((field) => {
+                        const fieldIssue = rowIssues.find((i) => i.field === field.key)
+                        const options = referenceOptions(entity, field, raw, context, plan)
+                        const value = raw[field.key] ?? ''
+                        return (
+                          <label key={field.key} className="col-span-1 space-y-0.5">
+                            <span className="block text-[10px] text-muted-foreground">{field.column}</span>
+                            {options ? (
+                              <Select value={value || UNMAPPED} onValueChange={(v) => onEdit(entity, rowNumber, field.key, v === UNMAPPED ? '' : v)}>
+                                <SelectTrigger className={cn('h-7 w-full text-xs', fieldIssue?.severity === 'error' && 'border-destructive')}>
+                                  <SelectValue placeholder="—" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={UNMAPPED}>—</SelectItem>
+                                  {options.map((o) => (
+                                    <SelectItem key={o} value={o}>{o}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <Input
+                                value={value}
+                                onChange={(e) => onEdit(entity, rowNumber, field.key, e.target.value)}
+                                className={cn('h-7 text-xs', fieldIssue?.severity === 'error' && 'border-destructive')}
+                              />
+                            )}
+                            {fieldIssue && (
+                              <span className={cn('block text-[10px]', fieldIssue.severity === 'error' ? 'text-destructive' : 'text-warning-foreground')}>
+                                {fieldIssue.message}
+                              </span>
+                            )}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {rowIssues.filter((i) => !i.field).length > 0 && <IssueList issues={rowIssues.filter((i) => !i.field)} />}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
