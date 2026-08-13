@@ -12,21 +12,28 @@ const MIN_INTERVAL_MS = 5 * 60_000
 // Runs recurrence materialisation on app open and on regaining focus
 // (DESIGN §6.6 — no cron needed; the unique constraint makes concurrent
 // runs from both phones harmless). Renders nothing.
+//
+// Always re-fetches the rule list itself right before materialising,
+// rather than trusting whatever's already in the query cache: that cache
+// can be up to 7 days stale (queryClient.ts's persister) and nothing
+// invalidates it when a row changes outside the app — directly in
+// Supabase, say. A rule deleted that way but still sitting in a stale
+// local cache would otherwise get "materialised" all over again the next
+// time this ran, silently recreating transactions for a rule that no
+// longer exists.
 export function RecurringMaterialiser() {
   const { householdId } = useHousehold()
-  const { data: rules } = useRecurringRules(householdId)
+  const { refetch } = useRecurringRules(householdId)
   const queryClient = useQueryClient()
   const lastRun = useRef(0)
-  const rulesRef = useRef(rules)
-  rulesRef.current = rules
 
   useEffect(() => {
     async function run() {
-      const current = rulesRef.current
-      if (!current || current.length === 0) return
       if (Date.now() - lastRun.current < MIN_INTERVAL_MS) return
       lastRun.current = Date.now()
       try {
+        const { data: current } = await refetch()
+        if (!current || current.length === 0) return
         const generated = await materialiseDue(householdId, current, todayIso())
         if (generated > 0) {
           queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
@@ -38,12 +45,12 @@ export function RecurringMaterialiser() {
       }
     }
 
-    if (rules) run()
+    run()
     const onFocus = () => run()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [householdId, rules != null, queryClient])
+  }, [householdId, queryClient])
 
   return null
 }
