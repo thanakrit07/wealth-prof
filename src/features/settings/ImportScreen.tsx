@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronDown, Download, Trash2, Undo2, Upload, X } from 'lucide-react'
+import { ChevronDown, Download, FileSpreadsheet, Trash2, Undo2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -12,8 +12,10 @@ import { detectMapping, mapRow, type ColumnMapping } from '@/lib/import/detect'
 import type { FieldSpec } from '@/lib/import/fields'
 import { ENTITY_LABELS, FIELD_SPECS } from '@/lib/import/fields'
 import { parseCsvText, type ParsedCsv } from '@/lib/import/parseCsv'
+import { parseXlsxFile } from '@/lib/import/parseXlsx'
 import { buildPlan, type FilesInput } from '@/lib/import/plan'
 import { buildTemplateCsv } from '@/lib/import/template'
+import { buildTemplateWorkbook } from '@/lib/import/templateXlsx'
 import {
   editKey,
   emptyRowEdits,
@@ -49,6 +51,15 @@ function downloadText(filename: string, content: string) {
   URL.revokeObjectURL(url)
 }
 
+function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 // v3.9-era redesign plan, "bulk import": in-app CSV import replacing
 // scripts/import-sheet.ts (see the ADR). Five states: pick files (with a
 // per-entity guide and template download) → map columns → preview (issues +
@@ -63,7 +74,7 @@ function downloadText(filename: string, content: string) {
 // the same buildPlan/applyPlan calls, filtered to one entity up front
 // rather than a parallel code path.
 export function ImportScreen({ onClose, mode = 'full' }: { onClose: () => void; mode?: 'full' | 'transactions' }) {
-  const availableEntities = mode === 'transactions' ? (['transactions'] as const satisfies readonly EntityKind[]) : ENTITY_KINDS
+  const availableEntities: readonly EntityKind[] = mode === 'transactions' ? ['transactions'] : ENTITY_KINDS
   const { householdId, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const { data: accounts } = useAccounts(householdId)
@@ -156,6 +167,35 @@ export function ImportScreen({ onClose, mode = 'full' }: { onClose: () => void; 
     setMappingByEntity((prev) => ({ ...prev, [entity]: detectMapping(parsed.headers, FIELD_SPECS[entity]) }))
   }
 
+  // One workbook can carry several entities at once (one sheet each), which
+  // is the whole reason to offer it over one-CSV-per-entity: a household
+  // doing a full import fills in one file, not six. Every matching sheet
+  // found overwrites whatever was already picked for that entity.
+  async function handleWorkbookUpload(file: File) {
+    const buffer = await file.arrayBuffer()
+    const parsedAll = await parseXlsxFile(buffer)
+    // Quick "transactions only" mode ignores sheets for anything else, even
+    // if the uploaded workbook has them — same restriction the CSV path
+    // already applies via `availableEntities`.
+    const found = Object.fromEntries(
+      Object.entries(parsedAll).filter(([entity]) => availableEntities.includes(entity as EntityKind)),
+    ) as Partial<Record<EntityKind, ParsedCsv>>
+    setParsedByEntity((prev) => ({ ...prev, ...found }))
+    setMappingByEntity((prev) => {
+      const next = { ...prev }
+      for (const entity of Object.keys(found) as EntityKind[]) {
+        const parsed = found[entity]
+        if (parsed) next[entity] = detectMapping(parsed.headers, FIELD_SPECS[entity])
+      }
+      return next
+    })
+  }
+
+  async function handleWorkbookDownload() {
+    const blob = await buildTemplateWorkbook(context, availableEntities)
+    downloadBlob('wealth-prof-import-template.xlsx', blob)
+  }
+
   async function goToMapping() {
     setStage('mapping')
   }
@@ -185,6 +225,8 @@ export function ImportScreen({ onClose, mode = 'full' }: { onClose: () => void; 
           entities={availableEntities}
           parsedByEntity={parsedByEntity}
           onFileChange={handleFileChange}
+          onDownloadWorkbook={handleWorkbookDownload}
+          onUploadWorkbook={handleWorkbookUpload}
           onContinue={goToMapping}
           canContinue={selectedEntities.length > 0}
         />
@@ -228,22 +270,62 @@ function FilesStep({
   entities,
   parsedByEntity,
   onFileChange,
+  onDownloadWorkbook,
+  onUploadWorkbook,
   onContinue,
   canContinue,
 }: {
   entities: readonly EntityKind[]
   parsedByEntity: Partial<Record<EntityKind, ParsedCsv>>
   onFileChange: (entity: EntityKind, file: File | null) => void
+  onDownloadWorkbook: () => void
+  onUploadWorkbook: (file: File) => void
   onContinue: () => void
   canContinue: boolean
 }) {
+  const workbookInputRef = useRef<HTMLInputElement>(null)
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         {entities.length > 1
-          ? "One CSV per kind of data, however many you have. Download a template first if you're not sure of the columns — open it in Google Sheets and fill in your own rows using the same headers."
-          : "Download the template first if you're not sure of the columns — open it in Google Sheets and fill in your own rows using the same headers."}
+          ? "Fill in one CSV per kind of data, or one Excel workbook covering however many you need — its Category/Account/Owner columns are dropdowns built from your own data, so there's less to get wrong by hand."
+          : "Fill in the CSV, or the Excel workbook — its Category/Account/Owner columns are dropdowns built from your own data, so there's less to get wrong by hand."}
       </p>
+
+      <div className="space-y-2 rounded-2xl border bg-card p-3">
+        <div className="flex items-center gap-2">
+          <FileSpreadsheet className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-sm font-medium">Excel workbook{entities.length > 1 ? ' (all in one file)' : ''}</span>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="flex-1" onClick={onDownloadWorkbook}>
+            <Download className="size-3.5" />
+            Download template
+          </Button>
+          <Button variant="outline" size="sm" className="flex-1" onClick={() => workbookInputRef.current?.click()}>
+            <Upload className="size-3.5" />
+            Upload workbook
+          </Button>
+          <input
+            ref={workbookInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) onUploadWorkbook(file)
+              e.target.value = ''
+            }}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          One sheet per kind of data{entities.length === 1 ? '' : ' — upload once, every matching sheet fills in at once'}. Dropdown
+          picks outside the list still work; they're a guide, not a hard rule.
+        </p>
+      </div>
+
+      {entities.length > 1 && <p className="text-xs text-muted-foreground">Or, per kind, a plain CSV:</p>}
       <ul className="space-y-3">
         {entities.map((entity) => (
           <EntityFilePicker key={entity} entity={entity} parsed={parsedByEntity[entity] ?? null} onFileChange={(f) => onFileChange(entity, f)} />

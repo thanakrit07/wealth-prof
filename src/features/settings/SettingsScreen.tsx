@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { FullScreenPage } from '@/components/FullScreenPage'
 import { CategoriesScreen } from '@/features/categories/CategoriesScreen'
 import { ChangePasswordDialog } from '@/features/settings/ChangePasswordDialog'
-import { ImportScreen } from '@/features/settings/ImportScreen'
 import { InviteSection } from '@/features/settings/InviteSection'
 import { useHousehold } from '@/lib/HouseholdContext'
 import { clearPersistedCache } from '@/lib/queryClient'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
+
+// Lazy: exceljs alone is ~900KB minified, pulled in only by the xlsx
+// template/parsing code Import uses. Bundling that into the main chunk
+// would tax every app open for a settings screen most sessions never
+// visit — a dynamic import keeps it out until someone actually taps in.
+const ImportScreen = lazy(() => import('@/features/settings/ImportScreen').then((m) => ({ default: m.ImportScreen })))
 
 const THEMES = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -118,7 +123,9 @@ export function SettingsScreen() {
 
       {importOpen && (
         <FullScreenPage title={importOpen === 'transactions' ? 'Bulk add transactions' : 'Import'} onClose={() => setImportOpen(null)}>
-          <ImportScreen onClose={() => setImportOpen(null)} mode={importOpen} />
+          <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Loading…</p>}>
+            <ImportScreen onClose={() => setImportOpen(null)} mode={importOpen} />
+          </Suspense>
         </FullScreenPage>
       )}
 
