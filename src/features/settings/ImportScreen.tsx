@@ -56,7 +56,14 @@ function downloadText(filename: string, content: string) {
 // All the logic lives in src/lib/import/* as pure functions — this
 // component is a render of buildPlan()'s output plus the file/mapping state
 // that feeds it.
-export function ImportScreen({ onClose }: { onClose: () => void }) {
+//
+// `mode: 'transactions'` restricts every step to the one entity most
+// imports actually are — "add a pile of transactions at once" — skipping
+// the six-file picker entirely. Nothing else changes: it's the same state,
+// the same buildPlan/applyPlan calls, filtered to one entity up front
+// rather than a parallel code path.
+export function ImportScreen({ onClose, mode = 'full' }: { onClose: () => void; mode?: 'full' | 'transactions' }) {
+  const availableEntities = mode === 'transactions' ? (['transactions'] as const satisfies readonly EntityKind[]) : ENTITY_KINDS
   const { householdId, members } = useHousehold()
   const { data: categories } = useCategories(householdId)
   const { data: accounts } = useAccounts(householdId)
@@ -87,7 +94,7 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
     [categories, accounts, cards, members],
   )
 
-  const selectedEntities = ENTITY_KINDS.filter((e) => parsedByEntity[e])
+  const selectedEntities = availableEntities.filter((e) => parsedByEntity[e])
 
   const files: FilesInput = useMemo(() => {
     const out: FilesInput = {}
@@ -175,6 +182,7 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
     <div className="mx-auto max-w-2xl space-y-6 p-4">
       {stage === 'files' && (
         <FilesStep
+          entities={availableEntities}
           parsedByEntity={parsedByEntity}
           onFileChange={handleFileChange}
           onContinue={goToMapping}
@@ -217,11 +225,13 @@ export function ImportScreen({ onClose }: { onClose: () => void }) {
 }
 
 function FilesStep({
+  entities,
   parsedByEntity,
   onFileChange,
   onContinue,
   canContinue,
 }: {
+  entities: readonly EntityKind[]
   parsedByEntity: Partial<Record<EntityKind, ParsedCsv>>
   onFileChange: (entity: EntityKind, file: File | null) => void
   onContinue: () => void
@@ -230,11 +240,12 @@ function FilesStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        One CSV per kind of data, however many you have. Download a template first if you're not sure of the columns — open it in
-        Google Sheets and fill in your own rows using the same headers.
+        {entities.length > 1
+          ? "One CSV per kind of data, however many you have. Download a template first if you're not sure of the columns — open it in Google Sheets and fill in your own rows using the same headers."
+          : "Download the template first if you're not sure of the columns — open it in Google Sheets and fill in your own rows using the same headers."}
       </p>
       <ul className="space-y-3">
-        {ENTITY_KINDS.map((entity) => (
+        {entities.map((entity) => (
           <EntityFilePicker key={entity} entity={entity} parsed={parsedByEntity[entity] ?? null} onFileChange={(f) => onFileChange(entity, f)} />
         ))}
       </ul>

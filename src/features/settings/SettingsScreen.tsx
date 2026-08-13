@@ -48,7 +48,7 @@ function ThemeToggle() {
 export function SettingsScreen() {
   const { self, members } = useHousehold()
   const [categoriesOpen, setCategoriesOpen] = useState(false)
-  const [importOpen, setImportOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState<'full' | 'transactions' | null>(null)
   const [passwordOpen, setPasswordOpen] = useState(false)
 
   // Clear the local cache first: signing out re-renders into the auth screen,
@@ -82,7 +82,10 @@ export function SettingsScreen() {
           <Button variant="outline" onClick={() => setCategoriesOpen(true)}>
             Manage categories
           </Button>
-          <Button variant="outline" onClick={() => setImportOpen(true)}>
+          <Button variant="outline" onClick={() => setImportOpen('transactions')}>
+            Bulk add transactions
+          </Button>
+          <Button variant="outline" onClick={() => setImportOpen('full')}>
             Import
           </Button>
         </div>
@@ -114,8 +117,8 @@ export function SettingsScreen() {
       )}
 
       {importOpen && (
-        <FullScreenPage title="Import" onClose={() => setImportOpen(false)}>
-          <ImportScreen onClose={() => setImportOpen(false)} />
+        <FullScreenPage title={importOpen === 'transactions' ? 'Bulk add transactions' : 'Import'} onClose={() => setImportOpen(null)}>
+          <ImportScreen onClose={() => setImportOpen(null)} mode={importOpen} />
         </FullScreenPage>
       )}
 
