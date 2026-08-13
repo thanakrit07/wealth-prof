@@ -1,13 +1,18 @@
 import { FIELD_SPECS } from './fields'
 import type { EntityKind } from './types'
 
-// Two example rows: a fully-filled one, and a minimal one showing that
-// optional fields can be left blank. Both use the same required values —
-// swapping an enum on its own (e.g. Kind) without changing the fields that
-// depend on it (Category, schedule fields) would produce a row that looks
-// like a real example but isn't a legal one.
-function secondExampleValue(field: { required: boolean; example: string }): string {
-  return field.required ? field.example : ''
+// Two example rows: a fully-filled one, and a second showing a different
+// shape (for transactions, a card bill payment) or simply which optional
+// columns can be left blank.
+//
+// `required` alone can't decide the second row's contents: several fields
+// are `required: false` here yet still rejected by validate.ts depending on
+// another column — Category is required unless Kind is transfer, Day of
+// month is required when Frequency is monthly. Deriving row 2 from the flag
+// shipped two templates whose own example row failed validation the moment
+// it was imported, so any such field states its row-2 value explicitly.
+function secondExampleValue(field: { required: boolean; example: string; example2?: string }): string {
+  return field.example2 ?? (field.required ? field.example : '')
 }
 
 function csvCell(value: string): string {

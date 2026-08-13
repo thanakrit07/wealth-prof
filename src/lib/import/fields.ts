@@ -22,6 +22,15 @@ export interface FieldSpec {
   /** Header spellings tried during auto-detect, `column` included. */
   aliases: string[]
   example: string
+  /**
+   * This field's value in the template's *second* example row. Defaults to
+   * `required ? example : ''` — which is wrong for any field that's only
+   * required under a condition (`required: false` here, but rejected by
+   * validate.ts depending on another column), so those set it explicitly.
+   * Getting this wrong ships a template whose own example row fails
+   * validation; template.test.ts pins every row against buildPlan.
+   */
+  example2?: string
   type: FieldType
   enumValues?: readonly string[]
 }
@@ -120,6 +129,7 @@ export const ACCOUNT_FIELDS: FieldSpec[] = [
     required: false,
     aliases: ['opening balance', 'balance', 'starting balance'],
     example: '15000',
+    example2: '',
     type: 'number',
   },
   {
@@ -128,8 +138,12 @@ export const ACCOUNT_FIELDS: FieldSpec[] = [
     label: 'Opening as of',
     description: 'The date the opening balance was true. Requires Opening balance.',
     required: false,
+    // Paired with Opening balance — set on row 1 because that row fills one
+    // in, blank on row 2 because that row fills neither. Leaving this empty
+    // while row 1 carried a balance made the "fully filled" example illegal.
     aliases: ['opening as of', 'as of', 'balance date'],
-    example: '',
+    example: '01/01/2026',
+    example2: '',
     type: 'date',
   },
 ]
@@ -371,6 +385,7 @@ export const RECURRING_RULE_FIELDS: FieldSpec[] = [
     required: false,
     aliases: ['category'],
     example: 'Subscriptions',
+    example2: 'Subscriptions',
     type: 'category-ref',
   },
   {
@@ -402,6 +417,7 @@ export const RECURRING_RULE_FIELDS: FieldSpec[] = [
     required: false,
     aliases: ['day of month'],
     example: '15',
+    example2: '15',
     type: 'day',
   },
   {
@@ -537,6 +553,13 @@ export const RECURRING_RULE_FIELDS: FieldSpec[] = [
   },
 ]
 
+// The second example row is a **credit-card bill payment**: the one shape
+// people reach for that isn't obvious from a column list, because it needs
+// three columns to agree at once (Kind = transfer, Category blank, To
+// account or card = the card). Paying a card bill is a transfer, never an
+// expense — the spending was already recorded when the card was charged
+// (D7), so filing the payment as an expense would double-count it and
+// leave the card's outstanding untouched.
 export const TRANSACTION_FIELDS: FieldSpec[] = [
   {
     key: 'date',
@@ -546,6 +569,7 @@ export const TRANSACTION_FIELDS: FieldSpec[] = [
     required: true,
     aliases: ['date', 'transaction date'],
     example: '03/01/2026',
+    example2: '05/02/2026',
     type: 'date',
   },
   {
@@ -556,6 +580,7 @@ export const TRANSACTION_FIELDS: FieldSpec[] = [
     required: true,
     aliases: ['kind', 'type'],
     example: 'expense',
+    example2: 'transfer',
     type: 'enum',
     enumValues: ['income', 'expense', 'transfer'],
   },
@@ -567,6 +592,7 @@ export const TRANSACTION_FIELDS: FieldSpec[] = [
     required: true,
     aliases: ['amount'],
     example: '250',
+    example2: '3995',
     type: 'number',
   },
   {
@@ -577,6 +603,7 @@ export const TRANSACTION_FIELDS: FieldSpec[] = [
     required: false,
     aliases: ['category'],
     example: 'Groceries',
+    example2: '',
     type: 'category-ref',
   },
   {
@@ -593,10 +620,11 @@ export const TRANSACTION_FIELDS: FieldSpec[] = [
     key: 'toInstrument',
     column: 'To account or card',
     label: 'To account or card',
-    description: 'Required only when Kind is transfer.',
+    description: 'Required only when Kind is transfer. For a card bill payment, this is the card being paid.',
     required: false,
     aliases: ['to account or card', 'to account', 'to card'],
     example: '',
+    example2: 'Card •• 1234',
     type: 'instrument-ref',
   },
   {
@@ -607,6 +635,7 @@ export const TRANSACTION_FIELDS: FieldSpec[] = [
     required: false,
     aliases: ['note', 'description', 'label'],
     example: 'Coffee',
+    example2: 'Card bill payment',
     type: 'text',
   },
   {
