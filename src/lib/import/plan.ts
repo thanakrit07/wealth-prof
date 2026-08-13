@@ -31,11 +31,20 @@ export interface EntityFileInput {
 
 export type FilesInput = Partial<Record<EntityKind, EntityFileInput>>
 
-function warnDuplicates(entity: EntityKind, rows: PlannedRow<{ name: string }>[], issues: ImportIssue[]) {
+// `keyOf` exists for categories, whose identity is name **and** kind: an
+// "Other" expense and an "Other" income are two different categories — the
+// app's own create_household seeds exactly that pair — so keying on the
+// name alone flagged a legitimate template as having duplicates.
+function warnDuplicates<T extends { name: string }>(
+  entity: EntityKind,
+  rows: PlannedRow<T>[],
+  issues: ImportIssue[],
+  keyOf: (value: T) => string = (value) => normalizeName(value.name),
+) {
   const seen = new Map<string, number>()
   for (const row of rows) {
     if (!row.value) continue
-    const key = normalizeName(row.value.name)
+    const key = keyOf(row.value)
     const firstRow = seen.get(key)
     if (firstRow !== undefined) {
       issues.push({
@@ -91,7 +100,7 @@ export function buildPlan(files: FilesInput, edits: RowEdits, baseContext: Impor
     if (value) context.categories.push({ name: value.name, kind: value.kind })
     return { rowNumber, raw, value }
   })
-  warnDuplicates('categories', categories, issues)
+  warnDuplicates('categories', categories, issues, (c) => `${c.kind}:${normalizeName(c.name)}`)
 
   const accounts = rowsFor('accounts').map(({ rowNumber, raw }) => {
     const { value, issues: rowIssues } = validateAccountRow(rowNumber, raw, context, dateFormat)

@@ -122,6 +122,39 @@ describe('buildPlan — duplicate name warnings', () => {
   })
 })
 
+describe('buildPlan — duplicate detection is per identity, not per name', () => {
+  it('does not flag the same category name under two different kinds', () => {
+    // create_household seeds "Other" for both kinds, so this pair is
+    // legitimate — keying the duplicate check on the name alone flagged it.
+    const files: FilesInput = {
+      categories: file(
+        ['name', 'kind', 'parent', 'icon', 'color'],
+        [
+          ['Other', 'expense', '', '', ''],
+          ['Other', 'income', '', '', ''],
+        ],
+      ),
+    }
+    const plan = buildPlan(files, emptyRowEdits(), ctx, 'dmy', '2026-01-10')
+    expect(plan.issues).toEqual([])
+    expect(plan.categories.every((r) => r.value !== null)).toBe(true)
+  })
+
+  it('still flags the same category name repeated under the same kind', () => {
+    const files: FilesInput = {
+      categories: file(
+        ['name', 'kind', 'parent', 'icon', 'color'],
+        [
+          ['Other', 'expense', '', '', ''],
+          ['Other', 'expense', '', '', ''],
+        ],
+      ),
+    }
+    const plan = buildPlan(files, emptyRowEdits(), ctx, 'dmy', '2026-01-10')
+    expect(plan.issues.map((i) => [i.severity, i.rowNumber])).toEqual([['warning', 2]])
+  })
+})
+
 describe('buildPlan — consequences', () => {
   it('reports installment periods that will post', () => {
     const files: FilesInput = {
