@@ -158,15 +158,27 @@ function App() {
   const [member, setMember] = useState<HouseholdMember | null>(null)
   const [memberLoading, setMemberLoading] = useState(true)
 
+  // Keyed on the user's id, not the session object. supabase-js hands back a
+  // brand-new session object on every TOKEN_REFRESHED — which it emits when
+  // the tab regains focus after being backgrounded — so depending on
+  // `session` re-ran this for the same signed-in user, flipped
+  // memberLoading, and dropped the whole app into the "Loading…" branch
+  // below. That unmounts SignedInApp and everything under it, so switching
+  // away from the app and back threw away whatever was in progress: an
+  // in-flight import's files, column mappings and row edits, a half-typed
+  // transaction, the screen you were on. The token still rotates underneath;
+  // this only stops a rotation from being mistaken for a change of user.
+  const userId = session?.user.id ?? null
+
   useEffect(() => {
-    if (!session) {
+    if (!userId) {
       setMember(null)
       setMemberLoading(false)
       return
     }
     let cancelled = false
     setMemberLoading(true)
-    fetchOwnMember(session.user.id)
+    fetchOwnMember(userId)
       .then((result) => {
         if (!cancelled) setMember(result)
       })
@@ -176,7 +188,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [session])
+  }, [userId])
 
   if (sessionLoading || (session && memberLoading)) {
     return (
