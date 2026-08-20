@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, Check, X } from 'lucide-react'
+import { ArrowRightLeft, Check, ChevronRight, ReceiptText, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { SwipeableRow } from '@/components/SwipeableRow'
@@ -18,6 +18,8 @@ import { supabase } from '@/lib/supabase'
 import { parsePeriodSourceKey } from '@/lib/installmentMaterialiser'
 import { useInstallmentPayments, useSetPeriodPaid } from '@/lib/installments'
 import { useTransactionShares } from '@/lib/transactionShares'
+import { entryAmount, groupByReceipt, type LedgerEntry } from '@/lib/receiptGrouping'
+import { useDeleteReceipt, useReceipts, useRestoreReceipt } from '@/lib/receipts'
 import { useDeleteTransaction, useTransactions, type Transaction } from '@/lib/transactions'
 import { cn } from '@/lib/utils'
 import { RecordsSummary } from './RecordsSummary'
@@ -91,6 +93,29 @@ export function TransactionsScreen({
   function installmentPeriodOf(t: Transaction) {
     if (t.source !== 'installment' || !t.from_card_id) return null
     return parsePeriodSourceKey(t.source_key)
+  }
+
+  const { data: receipts } = useReceipts(householdId)
+  const receiptById = useMemo(() => new Map((receipts ?? []).map((r) => [r.id, r])), [receipts])
+  const removeReceipt = useDeleteReceipt(householdId)
+  const restoreReceipt = useRestoreReceipt(householdId)
+  const [expandedReceipts, setExpandedReceipts] = useState<Set<string>>(() => new Set())
+  const [confirmingReceiptDelete, setConfirmingReceiptDelete] = useState<Extract<LedgerEntry, { type: 'receipt' }> | null>(null)
+
+  // All of a receipt's lines or none of them (ADR-0015). The refusal comes
+  // from `delete_receipt`, which names the line that has already been settled
+  // up rather than removing what it can — so the message is worth showing
+  // verbatim.
+  async function handleDeleteReceipt(receiptId: string) {
+    try {
+      await removeReceipt.mutateAsync(receiptId)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete this receipt')
+      return
+    }
+    toast.success('Receipt deleted', {
+      action: { label: 'Undo', onClick: () => restoreReceipt.mutate(receiptId) },
+    })
   }
 
   async function handleDelete(t: Transaction) {
@@ -175,77 +200,11 @@ export function TransactionsScreen({
 
   const filterCategory = categoryId ? categoryById.get(categoryId) : null
 
-  return (
-    <div className="mx-auto max-w-2xl space-y-3 p-4">
-      {/* One line (DESIGN §7.1 v3.5): the planning figures are the reason to
-          open Records, but the daily habit is "jot → check the list", so the
-          summary can't push the first transaction off the screen. On
-          desktop this same component renders in AppShell's summary column
-          instead (App.tsx), so it isn't rendered twice. */}
-      {!isDesktop && !isSearching && <RecordsSummary month={month} person={person} card={card} cardCycle={cardCycle} />}
-
-      <ReviewStrip onEdit={setEditing} />
-      {filterCategory && (
-        <button
-          onClick={onClearCategory}
-          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
-        >
-          <CategoryIcon icon={filterCategory.icon} color={filterCategory.color} className="size-3.5" />
-          {filterCategory.name}
-          <X className="size-3" aria-label="Clear category filter" />
-        </button>
-      )}
-      {accountId && (
-        <button
-          onClick={onClearAccount}
-          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
-        >
-          {instrumentName?.[`account:${accountId}`] ?? 'Account'}
-          <X className="size-3" aria-label="Clear account filter" />
-        </button>
-      )}
-      {card && (
-        <button
-          onClick={onClearCard}
-          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
-        >
-          {card.name}
-          <X className="size-3" aria-label="Clear card filter" />
-        </button>
-      )}
-      {groups.length === 0 && (
-        <p className="text-sm text-muted-foreground">{isSearching ? 'No matches.' : 'No transactions this month.'}</p>
-      )}
-      {/* One continuous ledger rather than a card per row (Money Manager
-          density): day headers carry that day's totals, and hairline
-          dividers replace the per-row borders and gaps. */}
-      <div className="overflow-hidden rounded-xl border bg-card">
-        {groups.map(([date, items], groupIndex) => {
-          const dayIncome = items.filter((t) => t.kind === 'income').reduce((s, t) => s + borneOf(t), 0)
-          const dayExpense = items.filter((t) => t.kind === 'expense').reduce((s, t) => s + borneOf(t), 0)
-          return (
-            <div key={date} className={groupIndex > 0 ? 'border-t' : undefined}>
-              <div className="flex items-center gap-2 bg-muted/50 px-3 py-1">
-                {isSearching ? (
-                  <span className="text-sm font-semibold tabular-nums">{fullDateLabel(date)}</span>
-                ) : (
-                  <>
-                    <span className="text-sm font-semibold tabular-nums">{dayOfMonthLabel(date)}</span>
-                    <span className="rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground">
-                      {weekdayLabel(date)}
-                    </span>
-                  </>
-                )}
-                <span className="ml-auto flex items-center gap-3 text-[11px] tabular-nums">
-                  {dayIncome > 0 && (
-                    <span className="text-good">{formatBaht(dayIncome)}</span>
-                  )}
-                  {dayExpense > 0 && <span className="text-destructive">{formatBaht(dayExpense)}</span>}
-                </span>
-              </div>
-
-              <ul>
-                {items.map((t) => {
+  // Extracted from the ledger's own map so the same row can be rendered
+  // inside an expanded Receipt without a second copy of it (D22). A line of
+  // a receipt is an ordinary Transaction and must look like one — only its
+  // indent differs.
+  const renderRow = (t: Transaction, indented = false) => {
                   const category = t.category_id ? categoryById.get(t.category_id) : null
                   const owner = t.owner_id ? memberById.get(t.owner_id) : null
                   const catPath = category ? categoryPath(category, categories ?? []) : null
@@ -276,12 +235,15 @@ export function TransactionsScreen({
                   const periodKey = period ? `${period.installmentId}:${period.periodNo}` : null
                   const periodPaid = periodKey != null && paidKeys.has(periodKey)
                   return (
-                    <li key={t.id} className="border-t">
+                    <li key={t.id} className={cn('border-t', indented && 'bg-muted/30')}>
                       <SwipeableRow onDelete={() => setConfirmingDelete(t)}>
                         <div className="flex items-center">
                           <button
                             onClick={() => setEditing(t)}
-                            className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 pl-3 text-left transition-colors active:bg-accent/60"
+                            className={cn(
+                              'flex min-w-0 flex-1 items-center gap-2.5 py-1.5 text-left transition-colors active:bg-accent/60',
+                              indented ? 'pl-10' : 'pl-3',
+                            )}
                           >
                             {t.kind === 'transfer' ? (
                               <ArrowRightLeft className="size-4 shrink-0 text-muted-foreground" />
@@ -368,7 +330,137 @@ export function TransactionsScreen({
                       </SwipeableRow>
                     </li>
                   )
-                })}
+  }
+
+  const toggleReceipt = (id: string) =>
+    setExpandedReceipts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const renderReceipt = (entry: Extract<LedgerEntry, { type: 'receipt' }>) => {
+    const receipt = receiptById.get(entry.receiptId)
+    const isOpen = expandedReceipts.has(entry.receiptId)
+    // Summed from the lines on screen, never from a stored figure — a Receipt
+    // has none (ADR-0015). Under a person filter this is what they Bear, and a
+    // line borne entirely by the other member never reached `lines` at all, so
+    // the row can honestly read less than the till printed (D14).
+    const total = entryAmount(entry, borneOf)
+    const first = entry.lines[0]
+    const kind = first?.kind ?? 'expense'
+    return (
+      <li key={entry.receiptId} className="border-t">
+        <SwipeableRow onDelete={() => setConfirmingReceiptDelete(entry)}>
+          <div className="flex items-center">
+            <button
+              onClick={() => toggleReceipt(entry.receiptId)}
+              aria-expanded={isOpen}
+              className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 pl-3 text-left transition-colors active:bg-accent/60"
+            >
+              {/* A Receipt has no Category, so it cannot show a category icon.
+                  Borrowing the largest line's would file the whole basket
+                  under one heading again — the thing this feature exists to
+                  stop. */}
+              <ReceiptText className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm">{receipt?.label ?? 'Receipt'}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {entry.lines.length} {entry.lines.length === 1 ? 'item' : 'items'}
+                  {first ? ` \u00b7 ${instrumentLabel(first, 'from')}` : ''}
+                </span>
+              </span>
+              <span className={cn('shrink-0 text-sm tabular-nums', kind === 'income' ? 'text-good' : 'text-destructive')}>
+                {kind === 'income' ? '+' : '-'}
+                {formatBaht(total)}
+              </span>
+              <ChevronRight
+                className={cn('ml-1.5 size-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}
+              />
+            </button>
+            <span className="w-3 shrink-0" />
+          </div>
+        </SwipeableRow>
+        {isOpen && <ul>{entry.lines.map((line) => renderRow(line, true))}</ul>}
+      </li>
+    )
+  }
+
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-3 p-4">
+      {/* One line (DESIGN §7.1 v3.5): the planning figures are the reason to
+          open Records, but the daily habit is "jot → check the list", so the
+          summary can't push the first transaction off the screen. On
+          desktop this same component renders in AppShell's summary column
+          instead (App.tsx), so it isn't rendered twice. */}
+      {!isDesktop && !isSearching && <RecordsSummary month={month} person={person} card={card} cardCycle={cardCycle} />}
+
+      <ReviewStrip onEdit={setEditing} />
+      {filterCategory && (
+        <button
+          onClick={onClearCategory}
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+        >
+          <CategoryIcon icon={filterCategory.icon} color={filterCategory.color} className="size-3.5" />
+          {filterCategory.name}
+          <X className="size-3" aria-label="Clear category filter" />
+        </button>
+      )}
+      {accountId && (
+        <button
+          onClick={onClearAccount}
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+        >
+          {instrumentName?.[`account:${accountId}`] ?? 'Account'}
+          <X className="size-3" aria-label="Clear account filter" />
+        </button>
+      )}
+      {card && (
+        <button
+          onClick={onClearCard}
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+        >
+          {card.name}
+          <X className="size-3" aria-label="Clear card filter" />
+        </button>
+      )}
+      {groups.length === 0 && (
+        <p className="text-sm text-muted-foreground">{isSearching ? 'No matches.' : 'No transactions this month.'}</p>
+      )}
+      {/* One continuous ledger rather than a card per row (Money Manager
+          density): day headers carry that day's totals, and hairline
+          dividers replace the per-row borders and gaps. */}
+      <div className="overflow-hidden rounded-xl border bg-card">
+        {groups.map(([date, items], groupIndex) => {
+          const dayIncome = items.filter((t) => t.kind === 'income').reduce((s, t) => s + borneOf(t), 0)
+          const dayExpense = items.filter((t) => t.kind === 'expense').reduce((s, t) => s + borneOf(t), 0)
+          return (
+            <div key={date} className={groupIndex > 0 ? 'border-t' : undefined}>
+              <div className="flex items-center gap-2 bg-muted/50 px-3 py-1">
+                {isSearching ? (
+                  <span className="text-sm font-semibold tabular-nums">{fullDateLabel(date)}</span>
+                ) : (
+                  <>
+                    <span className="text-sm font-semibold tabular-nums">{dayOfMonthLabel(date)}</span>
+                    <span className="rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground">
+                      {weekdayLabel(date)}
+                    </span>
+                  </>
+                )}
+                <span className="ml-auto flex items-center gap-3 text-[11px] tabular-nums">
+                  {dayIncome > 0 && (
+                    <span className="text-good">{formatBaht(dayIncome)}</span>
+                  )}
+                  {dayExpense > 0 && <span className="text-destructive">{formatBaht(dayExpense)}</span>}
+                </span>
+              </div>
+
+              <ul>
+                {groupByReceipt(items).map((entry) =>
+                  entry.type === 'transaction' ? renderRow(entry.transaction) : renderReceipt(entry),
+                )}
               </ul>
             </div>
           )
@@ -376,6 +468,14 @@ export function TransactionsScreen({
       </div>
 
       {editing && <TransactionSheet open onOpenChange={(open) => !open && setEditing(null)} transaction={editing} />}
+      {confirmingReceiptDelete && (
+        <ConfirmDialog
+          title="Delete this receipt?"
+          description={`Removes all ${confirmingReceiptDelete.lines.length} of its lines from every total. You'll have a few seconds to undo right after.`}
+          onConfirm={() => handleDeleteReceipt(confirmingReceiptDelete.receiptId)}
+          onClose={() => setConfirmingReceiptDelete(null)}
+        />
+      )}
       {confirmingDelete && (
         <ConfirmDialog
           title="Delete this transaction?"

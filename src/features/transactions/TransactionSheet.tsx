@@ -10,6 +10,7 @@ import { AmountField } from '@/components/AmountField'
 import { CategoryIcon } from '@/lib/categoryIcons'
 import { CategoryPickerPanel } from '@/components/CategoryPickerPanel'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { SplitReceiptDialog } from './SplitReceiptDialog'
 import { DatePickerPanel } from '@/components/DatePickerPanel'
 import { EntryPage } from '@/components/EntryPage'
 import { EntryRow } from '@/components/EntryRow'
@@ -119,6 +120,17 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
 
   const [detailsOpen, setDetailsOpen] = useState(Boolean(transaction?.description))
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [splitting, setSplitting] = useState(false)
+  // D22: splitting is an edit, not an entry mode (ADR-0015), so it lives on
+  // the row that already exists rather than on the way in. A transfer has no
+  // category to divide, and an installment period's amount is the plan's to
+  // decide (D15) — `split_transaction_into_receipt` refuses both, and the
+  // button does not offer them in the first place.
+  const canSplit =
+    transaction != null &&
+    transaction.kind !== 'transfer' &&
+    transaction.source !== 'installment' &&
+    transaction.receipt_id == null
   // How many rows this run of "Save & add" has written. The quick-add sheet
   // is mounted for the life of the app with `open` toggling (App.tsx), not
   // remounted per use, so this has to be cleared by hand — otherwise the
@@ -531,6 +543,15 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
             <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} onFocus={panel.close} />
           </div>
         )}
+        {canSplit && (
+          <button
+            type="button"
+            onClick={() => setSplitting(true)}
+            className="text-sm text-muted-foreground underline-offset-2 hover:underline"
+          >
+            Split into a receipt
+          </button>
+        )}
       </EntryPage>
 
       {creating === 'recurring' && (
@@ -549,6 +570,15 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
           prefill={buildPrefill()}
           onClose={() => {
             setCreating(null)
+            onOpenChange(false)
+          }}
+        />
+      )}
+      {splitting && transaction && (
+        <SplitReceiptDialog
+          transaction={transaction}
+          onClose={() => {
+            setSplitting(false)
             onOpenChange(false)
           }}
         />
