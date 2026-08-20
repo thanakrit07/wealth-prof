@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightLeft, CalendarSync, Repeat, Trash2 } from 'lucide-react'
+import { ArrowRightLeft, CalendarSync, ReceiptText, Repeat, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -543,14 +543,25 @@ export function TransactionSheet({ open, onOpenChange, transaction }: Props) {
             <Input id="txn-description" value={description} onChange={(e) => setDescription(e.target.value)} onFocus={panel.close} />
           </div>
         )}
+        {/* Set apart by a rule rather than left as a second bare text link
+            under "+ Add details": that one edits a field on this form, while
+            this one turns the record into something else. Wearing the same
+            clothes 12px apart, they read as one two-line list of the same
+            kind of action. */}
         {canSplit && (
-          <button
-            type="button"
-            onClick={() => setSplitting(true)}
-            className="text-sm text-muted-foreground underline-offset-2 hover:underline"
-          >
-            Split into a receipt
-          </button>
+          <div className="border-t pt-3">
+            <button
+              type="button"
+              onClick={() => setSplitting(true)}
+              className="flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-left transition-colors active:bg-accent/60"
+            >
+              <ReceiptText className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm">Split into a receipt</span>
+                <span className="block text-[11px] text-muted-foreground">One payment, more than one category</span>
+              </span>
+            </button>
+          </div>
         )}
       </EntryPage>
 

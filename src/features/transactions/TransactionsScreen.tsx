@@ -262,11 +262,10 @@ export function TransactionsScreen({
                                   </span>
                                 )}
                               </span>
-                              {(details || (mine != null && mine > 0 && mine < t.amount) || bearers.length > 0) && (
+                              {(details || bearers.length > 0) && (
                                 <span className="flex items-center gap-1">
                                   <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
                                     {details}
-                                    {mine != null && mine > 0 && mine < t.amount && (details ? ` · yours ${formatBaht(mine)}` : `yours ${formatBaht(mine)}`)}
                                   </span>
                                   {bearers.length > 0 && (
                                     <span className="flex shrink-0 items-center gap-0.5" aria-label={`Shared with ${bearers.map((m) => m.display_name).join(', ')}`}>
@@ -278,18 +277,33 @@ export function TransactionsScreen({
                                 </span>
                               )}
                             </span>
-                            <span
-                              className={cn(
-                                'shrink-0 text-sm tabular-nums',
-                                t.kind === 'income'
-                                  ? 'text-good'
-                                  : t.kind === 'expense'
-                                    ? 'text-destructive'
-                                    : 'text-muted-foreground',
+                            {/* `yours` used to be tacked onto the end of the
+                                details line, which truncates — so on any row
+                                with a long category path or instrument name it
+                                was the first thing to go, which is exactly the
+                                row that needed it. It sits under the amount
+                                instead: never truncated, aligned with the
+                                figure it is a portion of, and on a line the row
+                                had already reserved for the details beside it. */}
+                            <span className="shrink-0 text-right">
+                              <span
+                                className={cn(
+                                  'block text-sm tabular-nums',
+                                  t.kind === 'income'
+                                    ? 'text-good'
+                                    : t.kind === 'expense'
+                                      ? 'text-destructive'
+                                      : 'text-muted-foreground',
+                                )}
+                              >
+                                {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
+                                {formatBaht(t.amount)}
+                              </span>
+                              {mine != null && mine > 0 && mine < t.amount && (
+                                <span className="block text-[11px] tabular-nums text-muted-foreground">
+                                  yours {formatBaht(mine)}
+                                </span>
                               )}
-                            >
-                              {t.kind === 'income' ? '+' : t.kind === 'expense' ? '-' : ''}
-                              {formatBaht(t.amount)}
                             </span>
                           </button>
 
@@ -344,10 +358,16 @@ export function TransactionsScreen({
     const receipt = receiptById.get(entry.receiptId)
     const isOpen = expandedReceipts.has(entry.receiptId)
     // Summed from the lines on screen, never from a stored figure — a Receipt
-    // has none (ADR-0015). Under a person filter this is what they Bear, and a
-    // line borne entirely by the other member never reached `lines` at all, so
-    // the row can honestly read less than the till printed (D14).
-    const total = entryAmount(entry, borneOf)
+    // has none (ADR-0015). A line borne entirely by the other member never
+    // reached `lines` at all, so under a person filter the row can honestly
+    // read less than the till printed (D14).
+    //
+    // The headline is what those lines cost and `mine` is the portion this
+    // person bears, which is the convention every other row in the ledger
+    // already follows. Leading with the borne sum instead — which this did at
+    // first — put receipts on a different footing from the rows around them.
+    const total = entryAmount(entry, (line) => line.amount)
+    const mine = person !== 'all' ? entryAmount(entry, borneOf) : null
     const first = entry.lines[0]
     const kind = first?.kind ?? 'expense'
     return (
@@ -371,9 +391,14 @@ export function TransactionsScreen({
                   {first ? ` \u00b7 ${instrumentLabel(first, 'from')}` : ''}
                 </span>
               </span>
-              <span className={cn('shrink-0 text-sm tabular-nums', kind === 'income' ? 'text-good' : 'text-destructive')}>
-                {kind === 'income' ? '+' : '-'}
-                {formatBaht(total)}
+              <span className="shrink-0 text-right">
+                <span className={cn('block text-sm tabular-nums', kind === 'income' ? 'text-good' : 'text-destructive')}>
+                  {kind === 'income' ? '+' : '-'}
+                  {formatBaht(total)}
+                </span>
+                {mine != null && mine > 0 && mine < total && (
+                  <span className="block text-[11px] tabular-nums text-muted-foreground">yours {formatBaht(mine)}</span>
+                )}
               </span>
               <ChevronRight
                 className={cn('ml-1.5 size-4 shrink-0 text-muted-foreground transition-transform', isOpen && 'rotate-90')}
