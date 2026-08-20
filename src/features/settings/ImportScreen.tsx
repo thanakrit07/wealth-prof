@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronDown, Download, FileSpreadsheet, Trash2, Undo2, Upload, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Trash2, Undo2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -581,31 +581,103 @@ function PreviewStep({
 // absent from `plan` entirely — mapRow against the original file is the only
 // way left to show it (struck through, with Undo), which is the whole point
 // of keeping delete reversible instead of forgetting the row outright.
-function displayRawFor(entity: EntityKind, rowNumber: number, plan: ImportPlan, fileInput: FilesInput[EntityKind]): Record<string, string> {
-  const planned = (plan[entity] as { rowNumber: number; raw: Record<string, string> }[]).find((r) => r.rowNumber === rowNumber)
+//
+// `plannedByRow` is an index rather than the plan array itself: a linear
+// `.find()` here is O(rows²) over a file, which on a thousand-row
+// transactions import is over a million comparisons per render.
+function displayRawFor(
+  entity: EntityKind,
+  rowNumber: number,
+  plannedByRow: Map<number, { raw: Record<string, string> }>,
+  fileInput: FilesInput[EntityKind],
+): Record<string, string> {
+  const planned = plannedByRow.get(rowNumber)
   if (planned) return planned.raw
   const csvRow = fileInput!.rows[rowNumber - 1]
   return mapRow(csvRow, fileInput!.mapping, FIELD_SPECS[entity])
 }
 
-function referenceOptions(entity: EntityKind, field: FieldSpec, raw: Record<string, string>, context: ImportContext, plan: ImportPlan): string[] | null {
-  if (field.type === 'enum') return field.enumValues ? [...field.enumValues] : null
-  if (field.type === 'member-ref') return context.members.map((m) => m.name)
-  if (field.type === 'instrument-ref') {
-    const planAccounts = plan.accounts.map((r) => r.value).filter((v) => v !== null).map((v) => v.name)
-    const planCards = plan.cards.map((r) => r.value).filter((v) => v !== null).map((v) => v.name)
-    return [...new Set([...context.accounts.map((a) => a.name), ...planAccounts, ...context.cards.map((c) => c.name), ...planCards])]
+// Every reference dropdown on every row offers the same handful of lists, so
+// they're built once per plan instead of per row × per field — the old
+// per-cell rebuild allocated a Set and several arrays thousands of times for
+// one render of a large file.
+interface OptionSets {
+  instruments: string[]
+  members: string[]
+  categories: Record<'income' | 'expense', string[]>
+}
+
+function buildOptionSets(context: ImportContext, plan: ImportPlan): OptionSets {
+  const planAccounts = plan.accounts.map((r) => r.value).filter((v) => v !== null).map((v) => v.name)
+  const planCards = plan.cards.map((r) => r.value).filter((v) => v !== null).map((v) => v.name)
+  const planCategories = plan.categories.map((r) => r.value).filter((v) => v !== null)
+  const categoriesOf = (kind: 'income' | 'expense') => [
+    ...new Set([
+      ...context.categories.filter((c) => c.kind === kind).map((c) => c.name),
+      ...planCategories.filter((c) => c.kind === kind).map((c) => c.name),
+    ]),
+  ]
+  return {
+    instruments: [...new Set([...context.accounts.map((a) => a.name), ...planAccounts, ...context.cards.map((c) => c.name), ...planCards])],
+    members: context.members.map((m) => m.name),
+    categories: { income: categoriesOf('income'), expense: categoriesOf('expense') },
   }
+}
+
+function referenceOptions(entity: EntityKind, field: FieldSpec, raw: Record<string, string>, sets: OptionSets): readonly string[] | null {
+  if (field.type === 'enum') return field.enumValues ?? null
+  if (field.type === 'member-ref') return sets.members
+  if (field.type === 'instrument-ref') return sets.instruments
   if (field.type === 'category-ref') {
     const kind: 'income' | 'expense' = entity === 'installments' ? 'expense' : raw.kind?.trim().toLowerCase() === 'income' ? 'income' : 'expense'
-    const planCategories = plan.categories
-      .map((r) => r.value)
-      .filter((v) => v !== null)
-      .filter((c) => c.kind === kind)
-      .map((c) => c.name)
-    return [...new Set([...context.categories.filter((c) => c.kind === kind).map((c) => c.name), ...planCategories])]
+    return sets.categories[kind]
   }
   return null
+}
+
+const ROWS_PER_PAGE = 50
+const EMPTY_ISSUES: ImportIssue[] = []
+
+function Pager({
+  page,
+  pageCount,
+  from,
+  to,
+  total,
+  onPage,
+}: {
+  page: number
+  pageCount: number
+  from: number
+  to: number
+  total: number
+  onPage: (page: number) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-muted-foreground">
+        {from}–{to} of {total}
+      </span>
+      <div className="flex items-center gap-1">
+        <Button variant="outline" size="icon" className="size-7" disabled={page === 0} onClick={() => onPage(page - 1)} aria-label="Previous page">
+          <ChevronLeft className="size-3.5" />
+        </Button>
+        <span className="min-w-16 text-center text-xs text-muted-foreground">
+          {page + 1} / {pageCount}
+        </span>
+        <Button
+          variant="outline"
+          size="icon"
+          className="size-7"
+          disabled={page >= pageCount - 1}
+          onClick={() => onPage(page + 1)}
+          aria-label="Next page"
+        >
+          <ChevronRight className="size-3.5" />
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 function EntitySection({
@@ -627,20 +699,52 @@ function EntitySection({
 }) {
   const [rowsOpen, setRowsOpen] = useState(false)
   const [issuesOnly, setIssuesOnly] = useState(false)
+  const [page, setPage] = useState(0)
 
   const rows = plan[entity] as { rowNumber: number; raw: Record<string, string>; value: unknown }[]
-  const entityIssues = plan.issues.filter((i) => i.entity === entity)
-  const errors = entityIssues.filter((i) => i.severity === 'error')
   const totalRows = fileInput?.rows.length ?? 0
+
+  // One pass over the plan builds every per-row lookup the rows below need.
+  // Scanning `plan.issues` and `plan[entity]` inside the row loop instead is
+  // what made a large file lock the tab: each of a thousand rows walked both
+  // lists in full, on every keystroke.
+  const { entityIssues, errors, plannedByRow, issuesByRow } = useMemo(() => {
+    const entityIssues = plan.issues.filter((i) => i.entity === entity)
+    const plannedByRow = new Map<number, { rowNumber: number; raw: Record<string, string>; value: unknown }>()
+    for (const row of rows) plannedByRow.set(row.rowNumber, row)
+    const issuesByRow = new Map<number, ImportIssue[]>()
+    for (const issue of entityIssues) {
+      const list = issuesByRow.get(issue.rowNumber)
+      if (list) list.push(issue)
+      else issuesByRow.set(issue.rowNumber, [issue])
+    }
+    return { entityIssues, errors: entityIssues.filter((i) => i.severity === 'error'), plannedByRow, issuesByRow }
+  }, [plan, entity, rows])
+
+  const optionSets = useMemo(() => buildOptionSets(context, plan), [context, plan])
+
   const deletedCount = Array.from({ length: totalRows }, (_, i) => i + 1).filter((n) => edits.deleted.has(editKey(entity, n))).length
   const validCount = rows.filter((r) => r.value !== null).length
 
-  const visibleRowNumbers = Array.from({ length: totalRows }, (_, i) => i + 1).filter((rowNumber) => {
-    if (!issuesOnly) return true
-    const deleted = edits.deleted.has(editKey(entity, rowNumber))
-    if (deleted) return false
-    return entityIssues.some((i) => i.rowNumber === rowNumber)
-  })
+  const visibleRowNumbers = useMemo(
+    () =>
+      Array.from({ length: totalRows }, (_, i) => i + 1).filter((rowNumber) => {
+        if (!issuesOnly) return true
+        if (edits.deleted.has(editKey(entity, rowNumber))) return false
+        return issuesByRow.has(rowNumber)
+      }),
+    [totalRows, issuesOnly, edits.deleted, entity, issuesByRow],
+  )
+
+  // A thousand rows is a thousand × nine form controls, several of them
+  // dropdowns — enough mounted at once to freeze the tab, which is why the
+  // rows are paged rather than all rendered and scrolled. `safePage` clamps
+  // instead of an effect resetting it, so filtering down to a shorter list
+  // can't leave the view stranded past the end.
+  const pageCount = Math.max(1, Math.ceil(visibleRowNumbers.length / ROWS_PER_PAGE))
+  const safePage = Math.min(page, pageCount - 1)
+  const pageStart = safePage * ROWS_PER_PAGE
+  const pageRowNumbers = visibleRowNumbers.slice(pageStart, pageStart + ROWS_PER_PAGE)
 
   return (
     <div className="space-y-1.5 rounded-2xl border bg-card p-3">
@@ -662,16 +766,33 @@ function EntitySection({
         <div className="space-y-2">
           {entityIssues.length > 0 && (
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <input type="checkbox" checked={issuesOnly} onChange={(e) => setIssuesOnly(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={issuesOnly}
+                onChange={(e) => {
+                  setIssuesOnly(e.target.checked)
+                  setPage(0)
+                }}
+              />
               Show only rows with issues
             </label>
           )}
+          {pageCount > 1 && (
+            <Pager
+              page={safePage}
+              pageCount={pageCount}
+              from={pageStart + 1}
+              to={pageStart + pageRowNumbers.length}
+              total={visibleRowNumbers.length}
+              onPage={setPage}
+            />
+          )}
           <ul className="space-y-2">
-            {visibleRowNumbers.map((rowNumber) => {
+            {pageRowNumbers.map((rowNumber) => {
               const key = editKey(entity, rowNumber)
               const deleted = edits.deleted.has(key)
-              const raw = displayRawFor(entity, rowNumber, plan, fileInput)
-              const rowIssues = entityIssues.filter((i) => i.rowNumber === rowNumber)
+              const raw = displayRawFor(entity, rowNumber, plannedByRow, fileInput)
+              const rowIssues = issuesByRow.get(rowNumber) ?? EMPTY_ISSUES
               return (
                 <li key={rowNumber} className={cn('space-y-1.5 rounded-xl border p-2', deleted ? 'bg-muted/40 opacity-60' : 'bg-background')}>
                   <div className="flex items-center justify-between">
@@ -697,7 +818,7 @@ function EntitySection({
                     <div className="grid grid-cols-2 gap-1.5">
                       {FIELD_SPECS[entity].map((field) => {
                         const fieldIssue = rowIssues.find((i) => i.field === field.key)
-                        const options = referenceOptions(entity, field, raw, context, plan)
+                        const options = referenceOptions(entity, field, raw, optionSets)
                         const value = raw[field.key] ?? ''
                         return (
                           <label key={field.key} className="col-span-1 space-y-0.5">
@@ -736,6 +857,16 @@ function EntitySection({
               )
             })}
           </ul>
+          {pageCount > 1 && (
+            <Pager
+              page={safePage}
+              pageCount={pageCount}
+              from={pageStart + 1}
+              to={pageStart + pageRowNumbers.length}
+              total={visibleRowNumbers.length}
+              onPage={setPage}
+            />
+          )}
         </div>
       )}
     </div>
