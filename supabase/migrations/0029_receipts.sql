@@ -164,6 +164,20 @@ begin
     raise exception 'A receipt needs at least two lines';
   end if;
 
+  -- A repayment recorded a specific amount against a specific breakdown, and
+  -- splitting rewrites that breakdown — so this is refused for the same reason
+  -- deleting a settled receipt is. Checked up front rather than left to
+  -- trg_transaction_shares_guard_settled: that trigger fires from the delete
+  -- below and its wording is about deleting, which is not what the user is
+  -- doing here.
+  if exists (
+    select 1 from transaction_shares ts
+    join transactions settle on settle.id = ts.settled_by_transaction_id
+    where ts.transaction_id = p_transaction_id and settle.deleted_at is null
+  ) then
+    raise exception 'Already settled up: undo the repayment before splitting this';
+  end if;
+
   for v_line in select * from jsonb_array_elements(p_lines) loop
     v_sum := v_sum + (v_line->>'amount')::numeric;
   end loop;

@@ -47,6 +47,12 @@ export default defineConfig({
       },
     }),
   ],
+  server: {
+    port: 3000,
+    // Fail loudly rather than silently landing on 3001: a "default" port that
+    // moves when something else holds it isn't one.
+    strictPort: true,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
