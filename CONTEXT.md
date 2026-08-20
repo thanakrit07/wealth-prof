@@ -49,12 +49,28 @@ What a Transaction did to the household's total: income, expense, or transfer.
 A transfer changes neither total; it only moves value between Instruments.
 _Avoid_: type, direction
 
+**Category**:
+What a Transaction was for. Two levels: a main heading, optionally broken into
+subs that share its Kind. A Transaction that changes the household's total names
+exactly one — the most specific one chosen — while a Transfer names none, because
+moving money between the household's own Instruments is not spending on anything.
+_Avoid_: type (that word already means Kind), tag, bucket, label
+
 **Origin**:
 What caused a Transaction to exist: entered by hand, generated from a Recurring
 Rule, generated from an Installment Plan, written by a Reconcile, or brought in
 by the one-time import of the household's old Google Sheet.
 Independent of Kind — a salary is both recurring and income.
 _Avoid_: source (that word already means the paying Instrument), reason
+
+**Receipt**:
+One payment — or one receipt of money — that the ledger records as more than one
+Transaction, because it covered more than one Category. Its Transactions share a
+date and an Instrument, since only one payment happened. It holds nothing of its
+own but a name: its total is read back from its Transactions, so no figure on it
+can disagree with them.
+_Avoid_: basket, group, parent transaction, **split** (that word is already the
+division between Members)
 
 ### Commitments
 

@@ -2,6 +2,8 @@
 
 > Builds on [SPEC.md](./SPEC.md). Analyses the spec and proposes the architecture, data model, financial logic, UX and delivery plan for the real app in this repo.
 >
+> **v4.2 changes (2026-08-19, after grilling categories):** the ask was "more categories, or deeper ones"; the constraint turned out to be that **`transactions.category_id` is one column**, so a single ฿1,800 Makro payment covering fresh food, snacks and a saucepan has to file the whole basket under one heading — a limit no length of category list and no third level moves. The household's tree already holds 19 mains and 47 subs and still cannot record it. A **Receipt** (D22, [ADR-0015](./adr/0015-a-receipt-groups-transactions-and-holds-no-money.md), §4.3a) groups the several Transactions one payment produced, sharing a date and an Instrument, and **holds no money of its own** — an id and a name, with its total read back from its Transactions — so every figure in the app keeps summing a flat list of Transactions and stays right without ever learning what a Receipt is. Splitting is an **edit, not an entry mode**: a Transaction is recorded normally and then converted by stamping `receipt_id` on the row that already exists, so entry stays inside D9's tap budget and the three foreign keys pointing at `transactions.id` never move. Line items and a full-amount parent row were both considered and rejected — the first for creating a second table obliged to sum to `transactions.amount` along an axis independent of `transaction_shares`, the invariant migration 0022 already deadlocked three triggers over; the second for reviving the double-count bug D7 and §6.7 have each shipped once. **Depth stays at 1** (D10 unchanged) and **no categories are added**: the bulk import ([ADR-0014](./adr/0014-bulk-import-is-in-app-insert-only-and-has-no-heuristics.md)) turns every unmatched row into a named error, so running it against the real sheet produces the list of genuinely missing categories that guessing now cannot. Also recorded: **[CONTEXT.md](../CONTEXT.md) gains `Category`**, which the glossary had never defined despite it being the axis every report groups by, and `Receipt` beside it.
+>
 > **v4.1 changes (2026-08-13, bulk import rewritten before its first real run):** `scripts/import-sheet.ts` — written in phase 1, never run against the real sheet — turned out unsafe to run at all once grilled: its `source_key` was the CSV row's own index, so inserting one row mid-sheet shifted every key below it, and re-running upserted onto the wrong record while keeping its id; and it wrote account opening balances to `accounts.anchor_balance`/`anchor_date`, columns [ADR-0013](./adr/0013-anchors-accumulate-and-reconcile-is-an-action.md) had already made dead weight, which would have rendered every imported account at ฿0. It's replaced by an in-app screen (§9, [ADR-0014](./adr/0014-bulk-import-is-in-app-insert-only-and-has-no-heuristics.md)) that is **insert-only** (superseding §9's old "upsert, not wipe") and has **no heuristics** — every guess the script made (unmatched category → "Other", a note's percentage classified by magnitude, a label pattern-matched to a subscription) is replaced by a template the household fills in and a preview screen where every row that doesn't resolve is a named, editable error instead of a silent wrong answer.
 >
 > **v4 changes (2026-08-07, the responsive redesign — recorded here after the fact; the code shipped first):** the app **works on a desktop**, which it previously did not: app code held exactly one breakpoint class, no `@media` rules and no media-query hook, and `AppShell` hardcoded mobile at five points, so a laptop got a phone screen stretched to 1920px. Above `lg` it is now **three regions** — nav rail · ledger · summary column ([ADR-0010](./adr/0010-desktop-is-three-regions.md), §7.1), delivering a line §7.1 had promised since v3.5; below `lg` nothing changed. **The palette becomes Emerald and the type becomes self-hosted IBM Plex** — Sans for Latin, Sans Thai Looped for Thai, Mono for figures ([ADR-0009](./adr/0009-emerald-and-self-hosted-ibm-plex.md), §7.4), superseding both ADR-0005's system-font rule and v3.6's terracotta: the chrome went English but *the data never stopped being Thai*, so the app had been setting "Food → กาแฟ" in two unrelated typefaces on every screen. **The browser Back button works** ([ADR-0011](./adr/0011-url-state-uses-pushstate-so-back-works.md)) — `useUrlState` used `replaceState` and nothing listened for `popstate`, so Back left the app entirely from anywhere in it; masked on a phone by the edge-swipe gesture, a hard failure the moment a desktop layout existed. Also: the app has a **focus ring** for the first time (fourteen `active:` rules, six `hover:`, zero `focus-visible`), `SwipeableRow`'s Delete is reachable without a touchscreen at all, and `EntryPage` becomes a centred dialog above `lg` while its mobile path stays untouched.
@@ -59,6 +61,7 @@
 | **D20** *(v3.9)* | Every Balances row answers "how much can I still use?" (D19), and a card's headline figure is the limit it has left. Nothing on any screen answers CONTEXT.md's second question — how much cash to set aside before each card's bill is due | `cardOutstanding` is deliberately unbounded (ADR-0001), so a card mid-plan reads "฿12,000 owed" while the bill it will actually present is ฿3,000 — a household reading the screen as "cash needed" over-provisions fourfold. And `paidSoFar` attributed a payment to the cycle whose *window* it fell in, but due dates land after their cycle closes, so a settled bill still showed "฿0 paid" | **A card row leads with the most recently closed Cycle Bill and its due date**; owed/left drop to a secondary line. Section totals: Accounts = money held, Credit cards = **Set Aside** (those bills less what has been paid). Available credit is now summed nowhere at all. A payment settles the cycle that had most recently closed when it was made. Balances = closed bills, Upcoming = still moving — [ADR-0012](./adr/0012-balances-rows-answer-what-is-due-next.md) |
 | **D21** *(v3.9)* | D4's reconcile pattern is half-built: `accountBalance` computes anchor-plus-ledger, but the only way to move an anchor is two raw fields (`anchor_balance`, `anchor_date`) in the edit dialog — the inverse of §6.3, which says the user types the balance and the *system* dates it | D4 exists to catch "one missed update and the number drifts permanently", but overwriting the anchor corrects the number and destroys the evidence: the household is told they were wrong, never by how much or how often. And because `accountBalance` only moves forward from its anchor, pushing it to today makes every earlier balance uncomputable | **Reconcile is a first-class action** — type what the bank says, the app does the rest, and the word "anchor" leaves the interface. **Anchors accumulate as rows**, so nothing is destroyed and **Drift** becomes derivable. A row says how stale it is only once it is stale — [ADR-0013](./adr/0013-anchors-accumulate-and-reconcile-is-an-action.md) |
 | **D17** *(v3.6)* | The v3.5 entry form: Category grid open inline the whole time, the date picker's calendar expands inline and pushes rows below it down, and Who bears sits behind an "Edit" tap shared with Date | Recording something on the partner's behalf takes three taps to reach (Edit → Who bears → their name); Category permanently claims screen space whether or not it's in use; the calendar reflows the form under it instead of using D9's fixed panel; the Drawer's viewport ceiling fights the in-app keypad for room on small phones | **Full-screen pages, one shared bottom picker panel.** Amount, Category, Account/card and Date become rows that all open the same fixed panel, swapping its content; only one is ever open. Who bears is a persistent row with a one-tap button per other member. No more Edit toggle — every row is visible from open — [ADR-0006](./adr/0006-full-screen-entry-with-one-shared-picker-panel.md) |
+| **D22** *(v4.2)* | A Transaction names exactly one Category, so one payment is one heading | A ฿1,800 Makro trip is fresh food, snacks and sometimes a saucepan, on one charge. It has to pick one heading and the rest is counted as that forever — and neither a longer category list nor a third level changes that, because the limit is the single `category_id` column, not the list. The household's tree already carries 19 mains and 47 subs and the case still cannot be recorded | A **Receipt** groups the several Transactions one payment produced — same date, same Instrument, income or expense but never a transfer. It stores **an id and a name only**: total, date and Instrument are read back from its Transactions, so nothing on it can drift and no total in the app can double-count it. Splitting is an edit — `receipt_id` is stamped on the existing row, which stays the first line and keeps its id. Split inheritance is form behaviour, not stored state — [ADR-0015](./adr/0015-a-receipt-groups-transactions-and-holds-no-money.md) |
 
 ### 1.3 Pain point → the feature that answers it
 
@@ -134,6 +137,8 @@ erDiagram
     households ||--o{ recurring_rules : has
     households ||--o{ card_cycle_adjustments : has
     categories ||--o{ transactions : categorizes
+    households ||--o{ receipts : has
+    receipts ||--o{ transactions : groups
     categories ||--o{ installments : categorizes
     categories ||--o{ budgets : caps
     categories ||--o{ recurring_rules : categorizes
@@ -303,6 +308,78 @@ Notes:
 * A transfer never has a category. Income and expense always do, and `category_kind` is kept in sync by the composite foreign key — it cannot drift.
 * `unique (recurring_rule_id, occurrence_date)` is what makes recurrence generation safe to run from several devices at once. It ignores NULLs, which is correct here: manual rows have both columns null and are never deduplicated.
 * Cash advances are modelled as `transfer` from the card to a bank/cash account. The debt itself is an `installments` row (§4.5) with `is_cash_advance = true`.
+
+### 4.3a Receipts (D22 — v4.2)
+
+```sql
+create table receipts (
+  id            uuid primary key default gen_random_uuid(),
+  household_id  uuid not null references households(id) on delete cascade,
+  label         text not null,                        -- "Makro" — the only thing a receipt stores
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  updated_by    uuid references household_members(id)
+);
+
+alter table transactions add column receipt_id uuid references receipts(id);
+create index on transactions (receipt_id) where deleted_at is null;
+```
+
+There is deliberately **no amount, no date, no instrument and no `category_id` on
+`receipts`** — every one of them is read back from the transactions carrying
+`receipt_id`. That is what keeps the six places that sum a flat list of
+transactions correct without any of them knowing receipts exist
+(`RecordsSummary.tsx:205` and `:215`, `TransactionsScreen.tsx:225`,
+`balances.ts:94`, `:111`, `:132`), and it is why a receipt cannot double-count:
+it has no number to add. Contrast a parent row holding ฿1,800 above children
+holding ฿1,800 — the shape D7 and §6.7 have each had to defuse once already.
+
+A receipt's transactions **share a date and an instrument**, because one payment
+happened; a group spanning two days or two cards is not a receipt but a tag,
+which is a different axis and is not designed here. Transfers are excluded —
+they carry no category (`category_iff_not_transfer`), so there is nothing to
+divide. `receipt_id is null` is an ordinary transaction, unchanged: a ฿65 coffee
+never becomes a one-line receipt, which is what keeps a single path through the
+schema.
+
+**Splitting is an edit, not an entry mode.** ฿1,800 is recorded the normal way
+(§7.2, untouched), then converted: the existing row is stamped with a new
+`receipt_id` and keeps its id, its category and its shares, becoming the
+receipt's first line with its amount reduced to what is left; the other lines are
+written as siblings. Nothing pointing at `transactions.id` has to move —
+`installment_payments.transaction_id`, `transaction_shares.transaction_id` and
+`transaction_shares.settled_by_transaction_id` all keep addressing a row that
+still holds real money, so a repaid debt on the original transaction survives the
+conversion untouched.
+
+**The split is inherited at creation and never stored.** The form asks who bears
+it once and writes `transaction_shares` for every line; each line stays editable
+afterwards and is the only record of its own division — the saucepan halved, the
+snacks not. Unlike `installments.split` and `recurring_rules.split` (0026), which
+exist because those entities generate rows months later, a receipt generates
+nothing after its form closes, so a stored ratio would have no reader and one
+behaviour: going stale the first time a line is edited. Adding a line to an
+existing receipt copies the siblings' division when they agree, and otherwise
+defaults to "yours alone" for the user to correct.
+
+**Reading it back.** A receipt renders as one collapsed row carrying its own mark
+and a line count (never a category icon — it has no category), expanding to its
+transactions. Collapsing happens **after** totalling, never before. Under the
+person filter the row shows the sum of the **borne** portions of the lines that
+survive the filter, so a line borne entirely by the other member disappears from
+it and the row can read less than the till printed — D14 as specified, since
+showing ฿1,800 to both people is the exact `A + B = All` breakage D14 exists to
+end. In category reporting a receipt does not appear at all; its transactions do,
+each under its own category, which is the point.
+
+**Deleting is all-or-nothing.** If any line carries a settled share, the whole
+delete is refused and names the line (§7.5) rather than removing what it can and
+leaving a remnant — the same call D15 makes for Cleared periods. A receipt left
+with a single line stays a receipt; dissolving it automatically would add a
+second path through the same state. And because no total is stored, a basket
+entered ฿100 short simply records ฿100 less: there is no second figure to
+contradict, and the card's cycle disagreeing with the real statement is exactly
+the signal D3's per-cycle adjustment and D21's Drift exist to surface.
 
 ### 4.4 Recurring rules (D8)
 
