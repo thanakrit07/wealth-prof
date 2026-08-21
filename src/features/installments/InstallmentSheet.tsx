@@ -153,7 +153,10 @@ export function InstallmentSheet({ installment, onClose, prefill }: Props) {
       status: installment?.status ?? 'active',
     }
     if (installment) {
-      await update.mutateAsync({ id: installment.id, input })
+      // `previous` is the plan as it was before this save: renaming a plan
+      // rewrites the note on the periods it already posted (D15/v4.3), and
+      // recognising those notes needs the name they were posted under.
+      await update.mutateAsync({ id: installment.id, input, previous: installment })
     } else {
       await create.mutateAsync(input)
     }

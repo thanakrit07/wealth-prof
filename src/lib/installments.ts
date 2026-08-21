@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { parsePeriodSourceKey, periodSourceKey } from './installmentMaterialiser'
+import { parsePeriodSourceKey, periodSourceKey, renameInstallmentPeriods } from './installmentMaterialiser'
 import { supabase } from './supabase'
 import type { RatioSplit } from './transactionShares'
 
@@ -145,14 +145,51 @@ export function useCreateInstallment(householdId: string) {
   })
 }
 
+/**
+ * Saves an edit to the plan row — and, when the name changed, carries that one
+ * field down to the periods already in the ledger (D15 as amended in v4.3).
+ *
+ * `previous` is what the plan read before the edit, which the caller has and
+ * the database no longer does: the rename recognises the labels it may
+ * overwrite by rebuilding them from the old name, so it has to be passed the
+ * old name. Everything else about a posted period stays where it was posted.
+ */
 export function useUpdateInstallment(householdId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, input }: { id: string; input: Partial<InstallmentInput> }) => {
+    mutationFn: async ({
+      id,
+      input,
+      previous,
+    }: {
+      id: string
+      input: Partial<InstallmentInput>
+      previous?: Installment
+    }) => {
       const { error } = await supabase.from('installments').update(input).eq('id', id)
       if (error) throw error
+
+      if (!previous || input.name == null || input.name === previous.name) return
+      try {
+        await renameInstallmentPeriods(
+          householdId,
+          id,
+          { name: previous.name, totalPeriods: previous.total_periods },
+          { name: input.name, totalPeriods: input.total_periods ?? previous.total_periods },
+        )
+      } catch (renameError) {
+        // The plan is saved; only its posted labels are stale. Failing the
+        // whole mutation here would tell the user an edit that did land had
+        // not, which is the worse of the two wrong answers.
+        console.error('Could not rename posted installment periods', renameError)
+      }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['installments', householdId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['installments', householdId] })
+      // Unconditional: a rename rewrites rows the ledger is already showing,
+      // and a plan edit is rare enough that one extra refetch costs nothing.
+      queryClient.invalidateQueries({ queryKey: ['transactions', householdId] })
+    },
   })
 }
 

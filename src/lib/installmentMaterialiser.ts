@@ -22,7 +22,25 @@ import { applyRatioSplit, computeShareRows } from './transactionShares'
 
 /** The `source_key` a given period's transaction carries. */
 export function periodSourceKey(installmentId: string, periodNo: number): string {
-  return `installment:${installmentId}:${periodNo}`
+  return `${periodSourceKeyPrefix(installmentId)}${periodNo}`
+}
+
+/**
+ * The ledger label a period is posted with.
+ *
+ * One definition, because D15's rename rule works by *recognising* a label
+ * this function produced: a note that still reads exactly as it was posted is
+ * generated, anything else has been edited by hand and is not ours to
+ * overwrite. Two copies of this template drifting apart would turn every
+ * posted period into a hand-edited one.
+ */
+export function periodNote(name: string, periodNo: number, totalPeriods: number): string {
+  return `${name} (งวดที่ ${periodNo}/${totalPeriods})`
+}
+
+/** Every period of one plan, for a prefix match on `source_key`. */
+export function periodSourceKeyPrefix(installmentId: string): string {
+  return `installment:${installmentId}:`
 }
 
 /** Inverse of `periodSourceKey`; null when the key isn't an installment one. */
@@ -91,7 +109,7 @@ export async function materialiseInstallmentsDue(
         // No description key here — every row in this batch omits it
         // uniformly, so PostgREST leaves the column to its NOT NULL default
         // rather than sending an explicit null.
-        note: `${inst.name} (งวดที่ ${n}/${inst.total_periods})`,
+        note: periodNote(inst.name, n, inst.total_periods),
         amount: n === inst.total_periods && inst.final_amount != null ? inst.final_amount : inst.monthly_amount,
         owner_id: inst.owner_id,
         from_card_id: cardBilled ? inst.card_id : null,
@@ -154,4 +172,100 @@ export async function materialiseInstallmentsDue(
   }
 
   return posted
+}
+
+// ---------------------------------------------------------------------------
+// Renaming a plan (D15, amended v4.3)
+//
+// A plan is still immutable in every way that involves money: changing its
+// amount, count, start date, category or instrument stops at the `installments`
+// row, because working out which posted period may follow an edit — due, paid,
+// hand-edited, already settled up — is the propagation problem D15 exists to
+// refuse. The name is not that. It moves nothing, so it propagates to every
+// period the plan posted, settled ones included: a ledger listing the same debt
+// under two names is worse than one that renames its own history.
+//
+// The guard is recognition, not a timestamp: a period is rewritten only where
+// its note still reads exactly as `periodNote` wrote it. Anything a human has
+// since typed over no longer matches, and is left alone.
+
+/** What `periodsToRename` needs off a posted period; the query selects exactly this. */
+export interface PostedPeriodNote {
+  id: string
+  source_key: string | null
+  note: string | null
+}
+
+/** Both halves of the label, before and after — the count is in it too. */
+export interface PeriodLabel {
+  name: string
+  totalPeriods: number
+}
+
+/**
+ * Which posted periods a rename may rewrite, and to what.
+ *
+ * Pure, so the recognition rule can be tested without a database: rows whose
+ * note has been hand-edited, rows belonging to another plan, and rows that
+ * already read correctly all drop out here.
+ */
+export function periodsToRename(
+  rows: PostedPeriodNote[],
+  installmentId: string,
+  previous: PeriodLabel,
+  next: PeriodLabel,
+): { id: string; note: string }[] {
+  const updates: { id: string; note: string }[] = []
+  for (const row of rows) {
+    const parsed = parsePeriodSourceKey(row.source_key)
+    if (!parsed || parsed.installmentId !== installmentId) continue
+    // Matched against the count the row was *posted* with, not the current
+    // one: renaming and re-counting in the same save must still recognise
+    // the label it is replacing.
+    if (row.note !== periodNote(previous.name, parsed.periodNo, previous.totalPeriods)) continue
+    const note = periodNote(next.name, parsed.periodNo, next.totalPeriods)
+    if (note === row.note) continue
+    updates.push({ id: row.id, note })
+  }
+  return updates
+}
+
+/**
+ * Rewrites the note on every period this plan posted under its old name.
+ *
+ * Returns how many rows were rewritten. Never throws for a row it could not
+ * update: the plan itself has already been saved by the time this runs, and a
+ * label failing to catch up is not a reason to tell the user their edit failed.
+ */
+export async function renameInstallmentPeriods(
+  householdId: string,
+  installmentId: string,
+  previous: PeriodLabel,
+  next: PeriodLabel,
+): Promise<number> {
+  if (previous.name === next.name && previous.totalPeriods === next.totalPeriods) return 0
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, source_key, note')
+    .eq('household_id', householdId)
+    .eq('source', 'installment')
+    .like('source_key', `${periodSourceKeyPrefix(installmentId)}%`)
+    .is('deleted_at', null)
+  if (error) throw error
+
+  const updates = periodsToRename((data ?? []) as PostedPeriodNote[], installmentId, previous, next)
+  if (updates.length === 0) return 0
+
+  // One statement per row, since each carries its own period number. A plan is
+  // tens of periods at most, and they are independent — one failing leaves the
+  // rest correctly renamed rather than taking them down with it.
+  const results = await Promise.all(
+    updates.map((u) => supabase.from('transactions').update({ note: u.note }).eq('id', u.id)),
+  )
+  const failed = results.filter((r) => r.error)
+  if (failed.length > 0) {
+    console.error(`Could not rename ${failed.length} posted period(s)`, failed[0].error)
+  }
+  return updates.length - failed.length
 }
